@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seekr - Settings</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- External CSS -->
+    <link rel="stylesheet" href="/seekrai_ui.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <a href="/seekr/main" class="logo">
+                <div class="logo-icon">
+                    <img src="/src/images/Logo-Red_Hat-Hat_icon-Standard-RGB.svg" width="40" height="40" alt="Red Hat" />
+                </div>
+                <div>
+                    <span class="logo-text">Seekr</span>
+                    <span class="logo-subtitle">Red Hat Internal Search Tool</span>
+                </div>
+            </a>
+        </div>
+
+        <div class="header-center">
+            <div class="search-container">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="m21 21-4.35-4.35"/>
+                </svg>
+                <input type="text" class="search-input" placeholder="Search Seekr..." />
+                <button type="button" class="search-button">Search</button>
+            </div>
+        </div>
+
+        <div class="header-right">
+            <button class="notification-button" id="notificationBtn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+                <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
+            </button>
+            <!-- Notification Dropdown -->
+            <div class="notification-dropdown" id="notificationDropdown">
+                <div class="notification-header">
+                    <h3>Notifications</h3>
+                </div>
+                <div class="notification-list" id="notificationList">
+                    <div class="notification-empty">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                        </svg>
+                        <p>No notifications</p>
+                    </div>
+                </div>
+            </div>
+            <div class="user-menu" id="userMenu">
+                <div class="user-avatar" id="userAvatar">?</div>
+                <span class="user-name" id="userName">Loading...</span>
+                <svg class="dropdown-icon" viewBox="0 0 12 12" fill="currentColor">
+                    <path d="M2 4l4 4 4-4"/>
+                </svg>
+                <!-- User Dropdown Menu -->
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="/seekr/logout" class="dropdown-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                        Logout
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <nav class="sidebar-nav">
+                <a href="/seekr/main" class="nav-item" id="searchNavItem">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="m21 21-4.35-4.35"/>
+                    </svg>
+                    <span>Search</span>
+                </a>
+                <a href="/seekr/recent" class="nav-item">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    <span>Recent Searches</span>
+                </a>
+                <a href="/seekr/settings" class="nav-item active">
+                    <img src="/src/images/settings.svg" class="nav-icon" alt="Settings" style="filter: opacity(0.6);" />
+                    <span>Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="redhat-logo">
+                    <img src="/src/images/Logo-Red_Hat-A-Black-RGB.svg" alt="Red Hat" class="redhat-full-logo">
+                </div>
+                <p class="copyright">© 2026 Red Hat, Inc.</p>
+            </div>
+        </aside>
+
+        <!-- Settings Content -->
+        <div class="settings-content">
+            <div class="settings-header">
+                <h1 class="settings-title">Settings</h1>
+                <p class="settings-description">Configure your Seekr preferences and integrations</p>
+            </div>
+
+            <!-- API Tokens Section -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h2 class="section-title">API Integrations</h2>
+                    <p class="section-description">Configure API tokens for external service integrations</p>
+                </div>
+
+                <div class="settings-card" id="atlassian-token-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h3 class="card-title">Atlassian API Token</h3>
+                            <span class="required-badge">Required</span>
+                        </div>
+                        <p class="card-description">
+                            Personal API token for accessing Jira, Confluence, and other Atlassian services.
+                            This token is used to search and retrieve data from your Jira tickets and projects.
+                        </p>
+                    </div>
+
+                    <div class="card-body">
+                        <div class="info-banner">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <div class="info-content">
+                                <p class="info-text">
+                                    <strong>For your security, tokens can last no longer than 90 days.</strong>
+                                    When generating your token, you'll set an expiry date. Enter that same expiry date below.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="atlassianEmail" class="form-label">
+                                Atlassian Account Email
+                                <span class="label-hint">(Auto-populated from your Kerberos username)</span>
+                            </label>
+                            <input
+                                type="email"
+                                id="atlassianEmail"
+                                name="atlassianEmail"
+                                class="form-input"
+                                placeholder="your.email@redhat.com"
+                                readonly
+                            />
+                            <p class="field-help">
+                                Your Red Hat email is automatically populated from your Kerberos username. This is used to validate your Atlassian API token.
+                            </p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="atlassianToken" class="form-label">
+                                API Token
+                                <span class="label-hint">(Keep this secure)</span>
+                            </label>
+                            <div class="input-with-action">
+                                <input
+                                    type="password"
+                                    id="atlassianToken"
+                                    name="atlassianToken"
+                                    class="form-input"
+                                    placeholder="Enter your Atlassian API token"
+                                />
+                                <button type="button" class="toggle-visibility-btn" id="toggleAtlassianToken">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="field-help">
+                                <strong>Don't have an API token?</strong>
+                                <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" class="help-link">
+                                    Generate one here
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                                        <polyline points="15 3 21 3 21 9"/>
+                                        <line x1="10" y1="14" x2="21" y2="3"/>
+                                    </svg>
+                                </a>
+                            </p>
+                            <p class="field-help">
+                                <strong>Important:</strong> Before generating your token, you must first select an expiry date (maximum 90 days from today). After generating the token, enter the <strong>exact same expiry date</strong> in the "Token Expiry Date" field below.
+                            </p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="atlassianTokenExpiry" class="form-label">
+                                Token Expiry Date
+                                <span class="label-hint">(As set when you generated the token)</span>
+                            </label>
+                            <input
+                                type="date"
+                                id="atlassianTokenExpiry"
+                                name="atlassianTokenExpiry"
+                                class="form-input date-input"
+                            />
+                            <p class="field-help">
+                                <strong>💡 Important:</strong> Enter the <strong>exact same date</strong> you selected when generating the token on Atlassian. Seekr validates your token every 24 hours to detect if it has been revoked or expired.
+                            </p>
+                            <p class="field-help">
+                                • <strong>Date entered BEFORE Atlassian expiry:</strong> Seekr will stop using your token early, even though it's still valid on Atlassian. You'll lose days of valid usage.
+                            </p>
+                            <p class="field-help">
+                                • <strong>Date entered AFTER Atlassian expiry:</strong> Seekr will detect the token is expired within 24 hours and show a notification in the bell icon. The token will be cleared automatically.
+                            </p>
+                            <p class="field-help">
+                                <strong>Example:</strong> If Atlassian says "Expires: Jun 23, 2026", enter <code>06/23/2026</code> here (not Jun 22 or Jun 24).
+                            </p>
+                            <p class="field-help">
+                                <strong>🔔 Auto-detection:</strong> Seekr checks your token every 24 hours against Atlassian's API. If revoked or expired, you'll see a notification and the token will be cleared.
+                            </p>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" id="testTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                </svg>
+                                Test Connection
+                            </button>
+                            <button type="button" class="btn btn-primary" id="saveTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                    <polyline points="17 21 17 13 7 13 7 21"/>
+                                    <polyline points="7 3 7 8 15 8"/>
+                                </svg>
+                                Save Token
+                            </button>
+                        </div>
+
+                        <!-- Status Messages -->
+                        <div id="statusMessage" class="status-message"></div>
+                    </div>
+                </div>
+
+                <!-- Red Hat API Token Card -->
+                <div class="settings-card" id="redhat-token-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h3 class="card-title">Red Hat API Token</h3>
+                            <span class="required-badge">Required</span>
+                        </div>
+                        <p class="card-description">
+                            API token for accessing Red Hat services including Salesforce (SFDC) and Knowledge Centered Service (KCS) databases.
+                            Used to search and retrieve customer cases, knowledge articles, and support documentation.
+                        </p>
+                    </div>
+
+                    <div class="card-body">
+                        <div class="info-banner">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <div class="info-content">
+                                <p class="info-text">
+                                    <strong>Important:</strong> Tokens are only displayed once during generation and are not stored by Red Hat.
+                                    They will expire after <strong>30 days of inactivity</strong>. Generate a new token if yours has expired.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="redhatToken" class="form-label">
+                                API Token
+                                <span class="label-hint">(Salesforce & KCS Access)</span>
+                            </label>
+                            <div class="input-with-action">
+                                <input
+                                    type="password"
+                                    id="redhatToken"
+                                    name="redhatToken"
+                                    class="form-input"
+                                    placeholder="Enter your Red Hat API token"
+                                />
+                                <button type="button" class="toggle-visibility-btn" id="toggleRedhatToken">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="field-help">
+                                <strong>Don't have an API token?</strong>
+                                <a href="https://access.redhat.com/management/api" target="_blank" class="help-link">
+                                    Generate one here
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                                        <polyline points="15 3 21 3 21 9"/>
+                                        <line x1="10" y1="14" x2="21" y2="3"/>
+                                    </svg>
+                                </a>
+                            </p>
+                            <p class="field-help service-list">
+                                <strong>Provides access to:</strong>
+                                <span class="service-badge">Salesforce (SFDC)</span>
+                                <span class="service-badge">Knowledge Base (KCS)</span>
+                            </p>
+                            <p class="field-help">
+                                <strong>💡 Auto-expiry:</strong> Red Hat API tokens automatically expire after <strong>30 days</strong>. Seekr will notify you via the bell icon 7 days before expiry.
+                            </p>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" id="testRedhatTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                </svg>
+                                Test Connection
+                            </button>
+                            <button type="button" class="btn btn-primary" id="saveRedhatTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                    <polyline points="17 21 17 13 7 13 7 21"/>
+                                    <polyline points="7 3 7 8 15 8"/>
+                                </svg>
+                                Save Token
+                            </button>
+                        </div>
+
+                        <!-- Status Messages -->
+                        <div id="redhatStatusMessage" class="status-message"></div>
+                    </div>
+                </div>
+
+                <!-- Slack API Token Card -->
+                <div class="settings-card" id="slack-token-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h3 class="card-title">Slack API Tokens</h3>
+                            <span class="required-badge">Required</span>
+                        </div>
+                        <p class="card-description">
+                            Slack workspace tokens for accessing Red Hat Enterprise Slack channels and threads.
+                            Requires both xoxc- (user token) and xoxd- (cookie token) for authentication.
+                        </p>
+                    </div>
+
+                    <div class="card-body">
+                        <!-- Token Extractor Instructions -->
+                        <div class="token-extractor">
+                            <div class="extractor-header">
+                                <h4 class="extractor-title">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="16 18 22 12 16 6"/>
+                                        <polyline points="8 6 2 12 8 18"/>
+                                    </svg>
+                                    How to Get Your Slack Tokens
+                                </h4>
+                            </div>
+                            <div class="extractor-body">
+                                <p class="extractor-description">
+                                    <strong>Step 1:</strong> Open <a href="https://redhat.enterprise.slack.com/" target="_blank" class="help-link">Red Hat Enterprise Slack</a>
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 2:</strong> Press <kbd>F12</kbd> to open Developer Tools
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 3:</strong> Click the <strong>Application</strong> tab (or <strong>Storage</strong> in Firefox)
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 4 (xoxc token):</strong>
+                                    <br>• Go to <strong>Application</strong> tab
+                                    <br>• Expand <strong>Local Storage</strong> → <strong>https://app.slack.com</strong>
+                                    <br>• Click on <strong>localConfig_v2</strong>
+                                    <br>• In the value column, look for <code>"teams"</code>, find the team with <code>"name": "Internal Red Hat"</code>
+                                    <br>• Within that team, look for <code>"token"</code>
+                                    <br>• The token value starts with <strong>xoxc-</strong>
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 5 (xoxd token):</strong>
+                                    <br>• Go to <strong>Application</strong> tab
+                                    <br>• Expand <strong>Cookies</strong> → <strong>https://app.slack.com</strong>
+                                    <br>• Find the cookie named <strong>d</strong>
+                                    <br>• Copy its value (starts with <strong>xoxd-</strong>)
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- xoxc Token Input -->
+                        <div class="form-group">
+                            <label for="slackXoxcToken" class="form-label">
+                                xoxc- Token
+                                <span class="label-hint">(User Token)</span>
+                            </label>
+                            <div class="input-with-action">
+                                <input
+                                    type="password"
+                                    id="slackXoxcToken"
+                                    name="slackXoxcToken"
+                                    class="form-input"
+                                    placeholder="xoxc-..."
+                                />
+                                <button type="button" class="toggle-visibility-btn" id="toggleSlackXoxcToken">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- xoxd Token Input -->
+                        <div class="form-group">
+                            <label for="slackXoxdToken" class="form-label">
+                                xoxd- Token
+                                <span class="label-hint">(Cookie Token)</span>
+                            </label>
+                            <div class="input-with-action">
+                                <input
+                                    type="password"
+                                    id="slackXoxdToken"
+                                    name="slackXoxdToken"
+                                    class="form-input"
+                                    placeholder="xoxd-..."
+                                />
+                                <button type="button" class="toggle-visibility-btn" id="toggleSlackXoxdToken">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" id="testSlackTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                </svg>
+                                Test Connection
+                            </button>
+                            <button type="button" class="btn btn-primary" id="saveSlackTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                    <polyline points="17 21 17 13 7 13 7 21"/>
+                                    <polyline points="7 3 7 8 15 8"/>
+                                </svg>
+                                Save Tokens
+                            </button>
+                        </div>
+
+                        <!-- Status Messages -->
+                        <div id="slackStatusMessage" class="status-message"></div>
+                    </div>
+                </div>
+
+                <!-- GitHub API Token Card -->
+                <div class="settings-card" id="github-token-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h3 class="card-title">GitHub API Token</h3>
+                        </div>
+                        <p class="card-description">
+                            Personal Access Token for searching GitHub repositories, code, issues, and pull requests.
+                            Required to search Red Hat organization repositories.
+                        </p>
+                    </div>
+
+                    <div class="card-body">
+                        <!-- Token Generation Instructions -->
+                        <div class="token-extractor">
+                            <div class="extractor-header">
+                                <h4 class="extractor-title">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="16 18 22 12 16 6"/>
+                                        <polyline points="8 6 2 12 8 18"/>
+                                    </svg>
+                                    How to Generate Your GitHub Token
+                                </h4>
+                            </div>
+                            <div class="extractor-body">
+                                <p class="extractor-description">
+                                    <strong>Step 1:</strong> Go to <a href="https://github.com/settings/tokens" target="_blank" class="help-link">GitHub Personal Access Tokens</a>
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 2:</strong> Click <strong>"Generate new token"</strong> → <strong>"Generate new token (classic)"</strong>
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 3:</strong> Give your token a descriptive name (e.g., "SeekrAI Search")
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 4:</strong> Set expiration (recommended: 90 days)
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 5:</strong> Select scopes:
+                                    <br>• <strong>public_repo</strong> - Access public repositories
+                                    <br>• <strong>repo</strong> - Full control of private repositories (optional, if you need private repo access)
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 6:</strong> Click <strong>"Generate token"</strong> at the bottom
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 7:</strong> Copy the token (starts with <strong>ghp_</strong> or <strong>github_pat_</strong>)
+                                    <br><strong>⚠️ Important:</strong> The token is only shown once! Save it securely.
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 8:</strong> Go to <a href="https://github.com/settings/tokens" target="_blank" class="help-link">Your Tokens</a> to view the expiration date
+                                    <br>• Copy the expiration date shown next to your token
+                                    <br>• Enter it in the "Token Expiry Date" field below
+                                    <br>• SeekrAI will notify you before the token expires
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="githubToken" class="form-label">
+                                GitHub Personal Access Token
+                                <span class="label-hint">(Keep this secure)</span>
+                            </label>
+                            <div class="input-with-action">
+                                <input
+                                    type="password"
+                                    id="githubToken"
+                                    name="githubToken"
+                                    class="form-input"
+                                    placeholder="ghp_... or github_pat_..."
+                                />
+                                <button type="button" class="toggle-visibility-btn" id="toggleGitHubToken">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="field-help">
+                                <strong>Note:</strong> Tokens can expire. Enter the expiry date below so Seekr can notify you before it expires.
+                            </p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="githubTokenExpiry" class="form-label">
+                                Token Expiry Date
+                                <span class="label-hint required">(Required)</span>
+                            </label>
+                            <input
+                                type="date"
+                                id="githubTokenExpiry"
+                                name="githubTokenExpiry"
+                                class="form-input date-input"
+                                required
+                            />
+                            <p class="field-help">
+                                Check <a href="https://github.com/settings/tokens" target="_blank" class="help-link">Your Tokens</a> for the expiration date, then enter it here. Seekr will notify you before it expires.
+                            </p>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" id="testGitHubTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                </svg>
+                                Test Connection
+                            </button>
+                            <button type="button" class="btn btn-primary" id="saveGitHubTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                    <polyline points="17 21 17 13 7 13 7 21"/>
+                                    <polyline points="7 3 7 8 15 8"/>
+                                </svg>
+                                Save Token
+                            </button>
+                        </div>
+
+                        <!-- Status Messages -->
+                        <div id="githubStatusMessage" class="status-message"></div>
+                    </div>
+                </div>
+
+                <!-- GitLab API Token Card -->
+                <div class="settings-card" id="gitlab-token-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h3 class="card-title">GitLab API Token</h3>
+                        </div>
+                        <p class="card-description">
+                            Personal Access Token for searching GitLab repositories and code.
+                            Works with gitlab.com and self-hosted GitLab instances.
+                        </p>
+                    </div>
+
+                    <div class="card-body">
+                        <!-- Token Generation Instructions -->
+                        <div class="token-extractor">
+                            <div class="extractor-header">
+                                <h4 class="extractor-title">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="16 18 22 12 16 6"/>
+                                        <polyline points="8 6 2 12 8 18"/>
+                                    </svg>
+                                    How to Generate Your GitLab Token
+                                </h4>
+                            </div>
+                            <div class="extractor-body">
+                                <p class="extractor-description">
+                                    <strong>Step 1:</strong> Go to <a href="https://gitlab.cee.redhat.com/-/user_settings/personal_access_tokens" target="_blank" class="help-link">Red Hat GitLab - Personal Access Tokens</a>
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 2:</strong> Click <strong>"Add new token"</strong>
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 3:</strong> Give your token a name (e.g., "SeekrAI Search")
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 4:</strong> Set expiration date (recommended: 90 days)
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 5:</strong> Select scopes:
+                                    <br>• <strong>read_api</strong> - Read access to API
+                                    <br>• <strong>read_repository</strong> - Read access to repositories
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 6:</strong> Click <strong>"Create personal access token"</strong>
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 7:</strong> Copy the token immediately
+                                    <br>• Token format: Alphanumeric
+                                    <br>• Minimum length: 10 characters
+                                    <br><strong>⚠️ Important:</strong> The token is only shown once! Save it securely.
+                                </p>
+                                <p class="extractor-description">
+                                    <strong>Step 8:</strong> Go to <a href="https://gitlab.cee.redhat.com/-/user_settings/personal_access_tokens?page=1&state=active&sort=expires_asc" target="_blank" class="help-link">Active Tokens</a> to view the expiration date
+                                    <br>• Copy the expiration date shown in the "Expires" column
+                                    <br>• Enter it in the "Token Expiry Date" field below
+                                    <br>• SeekrAI will notify you before the token expires
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gitlabToken" class="form-label">
+                                GitLab Personal Access Token
+                                <span class="label-hint">(Keep this secure)</span>
+                            </label>
+                            <div class="input-with-action">
+                                <input
+                                    type="password"
+                                    id="gitlabToken"
+                                    name="gitlabToken"
+                                    class="form-input"
+                                    placeholder="Enter your GitLab personal access token"
+                                />
+                                <button type="button" class="toggle-visibility-btn" id="toggleGitLabToken">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="field-help">
+                                <strong>Note:</strong> Tokens can expire. Enter the expiry date below so Seekr can notify you before it expires.
+                            </p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gitlabTokenExpiry" class="form-label">
+                                Token Expiry Date
+                                <span class="label-hint required">(Required)</span>
+                            </label>
+                            <input
+                                type="date"
+                                id="gitlabTokenExpiry"
+                                name="gitlabTokenExpiry"
+                                class="form-input date-input"
+                                required
+                            />
+                            <p class="field-help">
+                                Check <a href="https://gitlab.cee.redhat.com/-/user_settings/personal_access_tokens?page=1&state=active&sort=expires_asc" target="_blank" class="help-link">Active Tokens</a> for the expiration date, then enter it here. Seekr will notify you before it expires.
+                            </p>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" id="testGitLabTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                </svg>
+                                Test Connection
+                            </button>
+                            <button type="button" class="btn btn-primary" id="saveGitLabTokenBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                    <polyline points="17 21 17 13 7 13 7 21"/>
+                                    <polyline points="7 3 7 8 15 8"/>
+                                </svg>
+                                Save Token
+                            </button>
+                        </div>
+
+                        <!-- Status Messages -->
+                        <div id="gitlabStatusMessage" class="status-message"></div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- External JavaScript -->
+    <script src="/src/token_manager.js?v=3.0"></script>
+    <script src="/seekrai_ui.js?v=52.0.JS_CONSOLIDATED"></script>
+</body>
+</html>

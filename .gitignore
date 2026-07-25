@@ -1,0 +1,91 @@
+# Credentials and sensitive files
+.env
+*.token
+credentials.json
+RUN_WITH_MY_TOKENS.sh
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Poetry
+poetry.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code settings (local only)
+.claude/
+
+# Logs
+*.log
+logs/
+*.txt
+!requirements.txt
+
+# Test files
+test_*.txt
+briefing_*.txt
+*_test.txt
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Images (except screenshots)
+*.png
+!a.png
+!b.png
+!c.png
+!test2.png
+tmp/
+.saved_credentials.json
+.env
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+build/
+*.egg-info/
+
+# Sensitive files with tokens
+user_tokens.json
+user_tokens.json.backup
+.saved_credentials.json
+
+# User data
+user_search_history.json
