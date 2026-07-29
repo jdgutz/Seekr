@@ -6,6 +6,8 @@ Then open: http://localhost:5500
 """
 from flask import Flask, render_template, request, jsonify, session
 import requests
+import requests.packages.urllib3
+requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 import subprocess
 import json
 import os
@@ -186,7 +188,7 @@ def search_sfdc(query: str, max_results: int = 20, config: Dict = None) -> Dict:
             "rows": max_results,
             "partnerSearch": False,
             # Only basic fields are available in search API - detailed fields require /cases/{id} endpoint
-            "expression": "sort=case_lastModifiedDate%20desc&fl=case_createdByName%2Ccase_createdDate%2Ccase_lastModifiedDate%2Cid%2Curi%2Ccase_summary%2Ccase_description%2Ccase_status%2Ccase_product%2Ccase_version%2Ccase_number%2Ccase_severity"
+            "expression": "sort=score%20desc&fl=case_createdByName%2Ccase_createdDate%2Ccase_lastModifiedDate%2Cid%2Curi%2Ccase_summary%2Ccase_description%2Ccase_status%2Ccase_product%2Ccase_version%2Ccase_number%2Ccase_severity"
         }
 
         # No retries - fail fast when API is down
@@ -343,11 +345,13 @@ def search_jira(query: str, max_results: int = 20, config: Dict = None, created_
             # Split query into words and search for any word match
             words = query.split()
             if len(words) > 1:
-                # Multi-word search: use AND or OR based on search_logic parameter
+                significant_words = [word for word in words if len(word) > 2]
                 separator = f' {search_logic} '
-                word_conditions = separator.join([f'text ~ "{word}"' for word in words if len(word) > 2])
-                jql = f'({word_conditions})'
-                print(f"🔍 Jira JQL (multi-word, {search_logic} logic): {jql}")
+                word_conditions = separator.join([f'text ~ "{word}"' for word in significant_words])
+                # OHSS tickets use OR logic so partial matches surface; other projects use the user's logic
+                ohss_or_conditions = ' OR '.join([f'text ~ "{word}"' for word in significant_words])
+                jql = f'(project = OHSS AND ({ohss_or_conditions})) OR ({word_conditions})'
+                print(f"🔍 Jira JQL (multi-word, OHSS-boosted): {jql}")
             else:
                 # Single word search
                 jql = f'text ~ "{query}"'
@@ -364,43 +368,60 @@ def search_jira(query: str, max_results: int = 20, config: Dict = None, created_
             jql = f'{jql} AND {" AND ".join(date_filters)}'
             print(f"🔍 Jira JQL (with date filter): {jql}")
 
-        # ORDER BY: Order by created date (newest first) - only for auto-generated JQL
-        # We'll sort OHSS tickets to the top in Python after getting results
-        jql = f'{jql} ORDER BY created DESC'
+        # No ORDER BY — Jira returns text search results by relevance when unordered
+        pass
 
     # End of if/else block for JQL generation
 
-    params = {
-        "jql": jql,
-        "maxResults": max_results,
-        "fields": "*all"  # Request ALL fields to debug custom field IDs
-    }
-
     try:
-        # Debug: Log the actual URL being called
         from urllib.parse import urlencode
-        encoded_params = urlencode(params)
-        debug_url = f"{jira_base_url}/search/jql?{encoded_params}"
-        app.logger.info(f"🌐 Jira API URL (first 200 chars): {debug_url[:200]}...")
-        app.logger.info(f"📏 JQL length: {len(jql)} characters")
+        from concurrent.futures import ThreadPoolExecutor
 
-        response = requests.get(
-            f"{jira_base_url}/search/jql",
-            headers=headers,
-            params=params,
-            auth=(atlassian_email, atlassian_token),
-            timeout=30
-        )
+        def _jira_api_call(jql_query, limit):
+            params = {"jql": jql_query, "maxResults": limit, "fields": "*all"}
+            debug_url = f"{jira_base_url}/search/jql?{urlencode(params)}"
+            app.logger.info(f"🌐 Jira API URL: {debug_url[:200]}...")
+            resp = requests.get(f"{jira_base_url}/search/jql", headers=headers, params=params,
+                                auth=(atlassian_email, atlassian_token), timeout=30)
+            resp.raise_for_status()
+            return resp.json()
 
-        # Debug: Log response status
-        response_data = response.json()
-        app.logger.info(f"📊 Jira API Response: status={response.status_code}, results={len(response_data.get('issues', []))}")
+        # Two parallel searches: OHSS-specific (OR logic) + general search
+        words = query.split()
+        significant_words = [w for w in words if len(w) > 2]
+        if significant_words and len(words) > 1:
+            ohss_or_conditions = ' OR '.join([f'text ~ "{w}"' for w in significant_words])
+            ohss_jql = f'project = OHSS AND ({ohss_or_conditions})'
+        elif significant_words:
+            ohss_jql = f'project = OHSS AND text ~ "{query}"'
+        else:
+            ohss_jql = None
 
-        response.raise_for_status()
-        data = response_data
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            general_future = executor.submit(_jira_api_call, jql, max_results)
+            ohss_future = executor.submit(_jira_api_call, ohss_jql, max_results) if ohss_jql else None
+
+        general_data = general_future.result()
+        ohss_data = ohss_future.result() if ohss_future else {"issues": []}
+
+        app.logger.info(f"📊 Jira general results: {len(general_data.get('issues', []))}, OHSS results: {len(ohss_data.get('issues', []))}")
+
+        # Merge: OHSS results first, then general (deduplicate by key)
+        seen_keys = set()
+        all_raw_issues = []
+        for issue in ohss_data.get('issues', []):
+            key = issue.get('key', '')
+            if key not in seen_keys:
+                seen_keys.add(key)
+                all_raw_issues.append(issue)
+        for issue in general_data.get('issues', []):
+            key = issue.get('key', '')
+            if key not in seen_keys:
+                seen_keys.add(key)
+                all_raw_issues.append(issue)
 
         issues = []
-        for issue in data.get('issues', []):
+        for issue in all_raw_issues:
             fields = issue['fields']
 
             # Debug: Print all field names for the first OHSS ticket to find custom field IDs
@@ -706,10 +727,83 @@ def call_ask_sre(tool_name: str, arguments: Dict, timeout: int = 30) -> List[Dic
         return []
 
 
-def search_sop(query: str, max_results: int = 20, config: Dict = None) -> Dict:
-    """Search SOP documents via ask-sre semantic search"""
+def _keyword_search_sop_db(query: str, limit: int = 20) -> List[Dict]:
+    """Search ask-sre PostgreSQL directly for file paths and content matching query keywords.
+    Prioritizes path matches over content-only matches."""
     try:
-        top_k = min(max(max_results, 1), 20)
+        query_words = [w.lower() for w in query.split() if len(w) > 2]
+        if not query_words:
+            return []
+
+        # Build conditions for path matches and content matches
+        path_conditions = " AND ".join(f"metadata->>'file_path' ILIKE '%{w}%'" for w in query_words)
+        any_path_cond = " OR ".join(f"metadata->>'file_path' ILIKE '%{w}%'" for w in query_words)
+        text_conditions = " AND ".join(f"document ILIKE '%{w}%'" for w in query_words)
+
+        sql = f"""
+        WITH ranked AS (
+            SELECT DISTINCT ON (metadata->>'file_path', metadata->>'source')
+                metadata->>'file_path' as file_path,
+                metadata->>'source' as source,
+                metadata->>'title' as title,
+                metadata->>'file_name' as file_name,
+                metadata->>'category' as category,
+                metadata->>'severity' as severity,
+                metadata->>'service_name' as service_name,
+                LEFT(document, 500) as doc_text,
+                CASE WHEN {path_conditions} THEN 2
+                     WHEN {any_path_cond} THEN 1
+                     ELSE 0 END as path_rank
+            FROM sre_docs
+            WHERE ({any_path_cond}) OR ({text_conditions})
+            ORDER BY metadata->>'file_path', metadata->>'source'
+        )
+        SELECT file_path, source, title, file_name, category, severity, service_name, doc_text
+        FROM ranked
+        ORDER BY path_rank DESC
+        LIMIT {limit};
+        """
+
+        result = subprocess.run(
+            ["podman", "exec", "pgvector", "psql", "-U", "postgres", "-d", "ask_sre_db",
+             "-t", "-A", "-F", "|||", "-c", sql],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode != 0:
+            print(f"⚠️ SOP keyword search DB error: {result.stderr[:200]}")
+            return []
+
+        results = []
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = line.split("|||")
+            if len(parts) >= 8:
+                results.append({
+                    "file_path": parts[0],
+                    "source": parts[1],
+                    "title": parts[2] or "No title",
+                    "file_name": parts[3] or "",
+                    "category": parts[4] or "",
+                    "severity": parts[5] or "",
+                    "service_name": parts[6] or "",
+                    "summary": parts[7] or "",
+                })
+
+        print(f"✅ SOP keyword search: {len(results)} results from DB")
+        return results
+
+    except Exception as e:
+        print(f"⚠️ SOP keyword search error: {e}")
+        return []
+
+
+def search_sop(query: str, max_results: int = 20, config: Dict = None) -> Dict:
+    """Search SOP documents via ask-sre semantic search + keyword fallback"""
+    try:
+        # Request extra results to account for deduplication across chunks
+        top_k = min(max(max_results * 3, 30), 60)
 
         raw_results = call_ask_sre("search_sre_docs", {
             "problem_statement": query,
@@ -717,27 +811,70 @@ def search_sop(query: str, max_results: int = 20, config: Dict = None) -> Dict:
         })
 
         if not raw_results:
-            return {"sops": [], "total": 0}
+            raw_results = []
 
-        sops = []
+        # Deduplicate by file_path — keep the chunk with the highest similarity
+        seen = {}
+        query_words = [w.lower() for w in query.split() if len(w) > 2]
         for result in raw_results:
             if "note" in result or not result.get("similarity"):
                 continue
-            sops.append({
-                "id": result.get("id", "N/A"),
-                "title": result.get("title", "No title"),
-                "summary": (result.get("document_text", "") or "")[:500],
-                "score": result.get("similarity", 0),
-                "category": result.get("category", ""),
-                "severity": result.get("severity", ""),
-                "source": result.get("source", ""),
-                "file_path": result.get("file_path", ""),
-                "file_name": result.get("file_name", ""),
-                "service_name": result.get("service_name", ""),
-                "url": ""
-            })
 
-        print(f"✅ ask-sre: Found {len(sops)} SOP results")
+            file_path = result.get("file_path", "")
+            source = result.get("source", "")
+            dedup_key = f"{source}:{file_path}"
+            similarity = result.get("similarity", 0)
+
+            # Boost score when query words appear in the file name or path
+            path_lower = file_path.lower()
+            keyword_matches = sum(1 for w in query_words if w in path_lower)
+            boosted_score = similarity + (keyword_matches * 0.15)
+
+            if dedup_key not in seen or boosted_score > seen[dedup_key]["score"]:
+                seen[dedup_key] = {
+                    "id": result.get("id", "N/A"),
+                    "title": result.get("title", "No title"),
+                    "summary": (result.get("document_text", "") or "")[:500],
+                    "score": boosted_score,
+                    "category": result.get("category", ""),
+                    "severity": result.get("severity", ""),
+                    "source": source,
+                    "file_path": file_path,
+                    "file_name": result.get("file_name", ""),
+                    "service_name": result.get("service_name", ""),
+                    "url": ""
+                }
+
+        # Supplement with keyword search from PostgreSQL for exact matches
+        keyword_results = _keyword_search_sop_db(query, limit=10)
+        for kr in keyword_results:
+            file_path = kr.get("file_path", "")
+            source = kr.get("source", "")
+            dedup_key = f"{source}:{file_path}"
+
+            if dedup_key not in seen:
+                path_lower = file_path.lower()
+                keyword_matches = sum(1 for w in query_words if w in path_lower)
+                # Keyword-only results get a base score + path match bonus
+                score = 0.05 + (keyword_matches * 0.15)
+                seen[dedup_key] = {
+                    "id": "N/A",
+                    "title": kr.get("title", "No title"),
+                    "summary": kr.get("summary", "")[:500],
+                    "score": score,
+                    "category": kr.get("category", ""),
+                    "severity": kr.get("severity", ""),
+                    "source": source,
+                    "file_path": file_path,
+                    "file_name": kr.get("file_name", ""),
+                    "service_name": kr.get("service_name", ""),
+                    "url": ""
+                }
+
+        # Sort by boosted score and return top results
+        sops = sorted(seen.values(), key=lambda x: x["score"], reverse=True)[:max_results]
+
+        print(f"✅ ask-sre: {len(raw_results)} semantic + {len(keyword_results)} keyword → {len(seen)} unique → {len(sops)} returned")
         return {
             "sops": sops,
             "total": len(sops)
@@ -1121,127 +1258,13 @@ def fetch_slack_thread(channel_id: str, thread_ts: str, config: Dict = None) -> 
 
 
 # ============================================================================
-# GitHub Search
-# ============================================================================
-
-def search_github(query: str, max_results: int = 20, config: Dict = None) -> Dict:
-    """Search GitHub repositories and code"""
-    try:
-        if config is None:
-            config = {}
-
-        github_token = config.get('github_token', os.getenv('GITHUB_TOKEN', ''))
-
-        print(f"🔍 GitHub Search: query='{query}', token={'SET' if github_token else 'NOT SET'}")
-
-        if not github_token:
-            print(f"❌ GitHub token not configured in config: {list(config.keys())}")
-            return {
-                'results': [],
-                'total': 0,
-                'error': 'GitHub token not configured'
-            }
-
-        print(f"✅ GitHub token found, length: {len(github_token)}")
-
-        # Search code in Red Hat organization repos
-        url = 'https://api.github.com/search/code'
-
-        headers = {
-            'Authorization': f'token {github_token}',
-            'Accept': 'application/vnd.github.v3+json'
-        }
-
-        # Strip words that are GitHub search qualifier keywords — they disrupt
-        # the Code Search API even without a trailing colon.
-        _gh_reserved = {'repo', 'org', 'user', 'path', 'filename', 'extension', 'language', 'in', 'is', 'fork', 'stars', 'size'}
-        gh_query = ' '.join(w for w in query.split() if w.lower() not in _gh_reserved) or query
-
-        # Step 1: Search specifically in openshift/ops-sop (priority)
-        ops_sop_params = {
-            'q': f'{gh_query} repo:openshift/ops-sop',
-            'per_page': max_results,
-            'page': 1
-        }
-
-        print(f"🌐 GitHub API request (ops-sop priority): {url}?q={ops_sop_params['q'][:100]}...")
-        ops_sop_response = requests.get(url, headers=headers, params=ops_sop_params, timeout=30)
-
-        results = []
-        ops_sop_count = 0
-
-        if ops_sop_response.status_code == 200:
-            ops_sop_data = ops_sop_response.json()
-            for item in ops_sop_data.get('items', []):
-                repo = item.get('repository', {})
-                results.append({
-                    'name': item.get('name', 'N/A'),
-                    'path': item.get('path', ''),
-                    'repository': repo.get('full_name', 'N/A'),
-                    'url': item.get('html_url', '#'),
-                    'score': item.get('score', 0) + 1000,  # Boost score for ops-sop results
-                    'language': repo.get('language', 'Unknown'),
-                    'description': repo.get('description', ''),
-                    'stars': repo.get('stargazers_count', 0),
-                    'updated': repo.get('updated_at', ''),
-                    'priority': True  # Mark as priority result
-                })
-            ops_sop_count = len(results)
-            print(f"✅ Found {ops_sop_count} results from openshift/ops-sop")
-
-        # Step 2: If we need more results, search other repos
-        remaining = max_results - ops_sop_count
-        if remaining > 0:
-            other_params = {
-                'q': f'{gh_query} org:openshift org:openshift-online org:rhobs -repo:openshift/ops-sop',
-                'per_page': remaining,
-                'page': 1
-            }
-
-            print(f"🌐 GitHub API request (other repos): {url}?q={other_params['q'][:100]}...")
-            other_response = requests.get(url, headers=headers, params=other_params, timeout=30)
-
-            if other_response.status_code == 401:
-                return {'results': results, 'total': ops_sop_count, 'error': 'GitHub authentication failed - invalid token'}
-
-            if other_response.status_code == 403:
-                return {'results': results, 'total': ops_sop_count, 'error': 'GitHub API rate limit exceeded'}
-
-            if other_response.status_code == 200:
-                other_data = other_response.json()
-                for item in other_data.get('items', []):
-                    repo = item.get('repository', {})
-                    results.append({
-                        'name': item.get('name', 'N/A'),
-                        'path': item.get('path', ''),
-                        'repository': repo.get('full_name', 'N/A'),
-                        'url': item.get('html_url', '#'),
-                        'score': item.get('score', 0),
-                        'language': repo.get('language', 'Unknown'),
-                        'description': repo.get('description', ''),
-                        'stars': repo.get('stargazers_count', 0),
-                        'updated': repo.get('updated_at', ''),
-                        'priority': False
-                    })
-                print(f"✅ Found {len(results) - ops_sop_count} results from other repos")
-
-        print(f"✅ GitHub: Total {len(results)} results ({ops_sop_count} from ops-sop)")
-        return {
-            'results': results,
-            'total': len(results)
-        }
-
-    except Exception as e:
-        print(f"GitHub search error: {e}")
-        return {'results': [], 'total': 0, 'error': str(e)}
-
-
-# ============================================================================
 # GitLab Search
 # ============================================================================
 
+GITLAB_GROUPS = ['mcs', 'service']
+
 def search_gitlab(query: str, max_results: int = 20, config: Dict = None) -> Dict:
-    """Search GitLab repositories and code"""
+    """Search GitLab mcs and service group repos using project-level blob search (file content)."""
     try:
         if config is None:
             config = {}
@@ -1252,148 +1275,92 @@ def search_gitlab(query: str, max_results: int = 20, config: Dict = None) -> Dic
         print(f"🔍 GitLab Search: query='{query}', url={gitlab_url}, token={'SET' if gitlab_token else 'NOT SET'}")
 
         if not gitlab_token:
-            print(f"❌ GitLab token not configured in config: {list(config.keys())}")
-            return {
-                'results': [],
-                'total': 0,
-                'error': 'GitLab token not configured'
-            }
+            return {'results': [], 'total': 0, 'error': 'GitLab token not configured. Add it in Settings.'}
 
-        print(f"✅ GitLab token found, length: {len(gitlab_token)}")
-
-        # GitLab requires minimum 3 characters
         if len(query.strip()) < 3:
-            print(f"⚠️ GitLab: Query too short (min 3 chars)")
             return {'results': [], 'total': 0, 'error': 'Search query must be at least 3 characters'}
 
-        # GitLab's search endpoint: use 'projects' scope since 'blobs' requires advanced search
-        # Prioritize mcs group by searching group projects first
-        headers = {
-            'PRIVATE-TOKEN': gitlab_token,
-            'Content-Type': 'application/json'
-        }
-
+        headers = {'PRIVATE-TOKEN': gitlab_token}
         results = []
 
-        # First, search within mcs group
-        # Note: GitLab's 'search' parameter filters by project name/description
-        # We'll get all MCS projects and filter ourselves for better results
-        try:
-            mcs_url = f'{gitlab_url}/api/v4/groups/mcs/projects'
-            mcs_params = {
-                'per_page': 20,
-                'simple': 'true',
-                'order_by': 'last_activity_at'
-            }
-            print(f"🌐 GitLab MCS group projects: {mcs_url} with params: {mcs_params}")
-            mcs_response = requests.get(mcs_url, headers=headers, params=mcs_params, timeout=30)
+        # Step 1: Get projects from all configured groups
+        projects = []
+        for group in GITLAB_GROUPS:
+            group_url = f'{gitlab_url}/api/v4/groups/{group}/projects'
+            try:
+                resp = requests.get(group_url, headers=headers, params={'per_page': 50, 'simple': 'true', 'order_by': 'last_activity_at'}, timeout=15, verify=False)
+                if resp.status_code == 200:
+                    group_projects = resp.json()
+                    projects.extend(group_projects)
+                    print(f"📊 GitLab: Found {len(group_projects)} projects in {group} group")
+                else:
+                    print(f"⚠️ GitLab: Failed to list {group} projects: {resp.status_code}")
+            except Exception as e:
+                print(f"⚠️ GitLab: Error listing {group} projects: {e}")
 
-            print(f"📡 MCS response status: {mcs_response.status_code}")
-            if mcs_response.status_code != 200:
-                print(f"❌ MCS group error: {mcs_response.text}")
+        if not projects:
+            return {'results': [], 'total': 0, 'error': 'No projects found in mcs/service groups'}
 
-            if mcs_response.status_code == 200:
-                all_mcs_projects = mcs_response.json()
-                print(f"📊 Total MCS projects: {len(all_mcs_projects)}")
+        print(f"📊 GitLab: Searching file content across {len(projects)} total projects...")
 
-                # Debug: Log project names
-                if all_mcs_projects:
-                    project_names = [p.get('name', 'N/A') for p in all_mcs_projects[:5]]
-                    print(f"📋 First 5 MCS projects: {', '.join(project_names)}")
+        # Step 2: Search file content in each project using project-level blob search (parallel)
+        def search_project_blobs(project):
+            proj_id = project.get('id')
+            proj_path = project.get('path_with_namespace', '')
+            proj_name = project.get('name_with_namespace', project.get('name', ''))
+            default_branch = project.get('default_branch', 'main')
 
-                # Search file names within each MCS project (parallel)
-                query_words = query.lower().split()
-                print(f"🔍 Searching for files matching: {query_words}")
+            try:
+                search_url = f'{gitlab_url}/api/v4/projects/{proj_id}/search'
+                resp = requests.get(search_url, headers=headers,
+                                    params={'scope': 'blobs', 'search': query, 'per_page': 5},
+                                    timeout=10, verify=False)
+                if resp.status_code != 200:
+                    return []
 
-                def search_project_files(project):
-                    """Search files in a single project"""
-                    project_results = []
-                    project_id = project.get('id')
-                    project_name = project.get('name_with_namespace', project.get('name', 'N/A'))
-                    path_with_ns = project.get('path_with_namespace', '')
-                    default_branch = project.get('default_branch', 'main')
+                proj_results = []
+                for blob in resp.json():
+                    file_path = blob.get('path', blob.get('filename', ''))
+                    filename = file_path.split('/')[-1] if file_path else ''
+                    ref = blob.get('ref', default_branch)
+                    file_url = f"{gitlab_url}/{proj_path}/-/blob/{ref}/{file_path}"
 
-                    # Get repository tree (file list) for this project
-                    tree_url = f'{gitlab_url}/api/v4/projects/{project_id}/repository/tree'
-                    tree_params = {
-                        'recursive': 'true',
-                        'per_page': 100,
-                        'ref': default_branch
-                    }
+                    proj_results.append({
+                        'filename': filename,
+                        'path': file_path,
+                        'project_id': proj_id,
+                        'project_name': proj_name,
+                        'ref': ref,
+                        'url': file_url,
+                        'summary': blob.get('data', '')[:300],
+                        'startline': blob.get('startline', 0),
+                        'priority': True,
+                    })
+                return proj_results
+            except Exception:
+                return []
 
-                    try:
-                        tree_response = requests.get(tree_url, headers=headers, params=tree_params, timeout=10)
+        from concurrent.futures import as_completed
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(search_project_blobs, p): p for p in projects}
+            for future in as_completed(futures):
+                proj_results = future.result()
+                if proj_results:
+                    results.extend(proj_results)
+                if len(results) >= max_results:
+                    break
 
-                        if tree_response.status_code == 200:
-                            files = tree_response.json()
+        results = results[:max_results]
+        print(f"✅ GitLab: Found {len(results)} results across mcs projects")
+        return {'results': results, 'total': len(results)}
 
-                            # Filter files matching query keywords
-                            for file_item in files:
-                                if file_item.get('type') != 'blob':  # Skip directories
-                                    continue
-
-                                # Keep original case-sensitive values
-                                original_name = file_item.get('name', '')
-                                original_path = file_item.get('path', '')
-
-                                # Use lowercase for matching only
-                                file_name_lower = original_name.lower()
-                                file_path_lower = original_path.lower()
-
-                                # Check if all query words match the file name or path
-                                if all(word in file_name_lower or word in file_path_lower for word in query_words):
-                                    # Use original case-sensitive path in URL
-                                    file_url = f"{gitlab_url}/{path_with_ns}/-/blob/{default_branch}/{original_path}"
-
-                                    project_results.append({
-                                        'filename': original_name,
-                                        'path': original_path,
-                                        'project_id': project_id,
-                                        'project_name': project_name,
-                                        'ref': default_branch,
-                                        'content_snippet': '',
-                                        'url': file_url,
-                                        'priority': True
-                                    })
-
-                                    # Limit results per project to 5
-                                    if len(project_results) >= 5:
-                                        break
-
-                    except Exception as tree_error:
-                        print(f"  ⚠️ Could not fetch tree for {project_name}: {tree_error}")
-
-                    return project_results
-
-                # Search projects in parallel (much faster!)
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    future_to_project = {executor.submit(search_project_files, proj): proj for proj in all_mcs_projects}
-
-                    for future in as_completed(future_to_project):
-                        project_results = future.result()
-                        if project_results:
-                            for result in project_results:
-                                print(f"  ✓ Found: {result['path']} in {result['project_name']}")
-                            results.extend(project_results)
-
-                        # Stop if we have enough results
-                        if len(results) >= max_results:
-                            break
-
-                print(f"✅ Found {len(results)} files in MCS projects (parallel search)")
-        except Exception as e:
-            print(f"⚠️ MCS group search failed: {e}")
-
-        print(f"✅ GitLab: Found {len(results)} results")
-        return {
-            'results': results,
-            'total': len(results)
-        }
-
+    except requests.exceptions.ConnectionError:
+        print(f"❌ GitLab: Cannot connect to {gitlab_url}")
+        return {'results': [], 'total': 0, 'error': f'Cannot connect to {gitlab_url}'}
     except Exception as e:
-        print(f"GitLab search error: {e}")
+        print(f"❌ GitLab search error: {e}")
+        import traceback
+        traceback.print_exc()
         return {'results': [], 'total': 0, 'error': str(e)}
 
 
@@ -1408,14 +1375,13 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
         if config is None:
             config = {}
 
-        with ThreadPoolExecutor(max_workers=7) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             # Submit all searches concurrently with config
             jira_future = executor.submit(search_jira, query, max_results_per_source, config, jira_created_after, jira_created_before, custom_jql, search_logic)
             sfdc_future = executor.submit(search_sfdc, query, max_results_per_source, config)
             slack_future = executor.submit(search_slack, query, max_results_per_source, slack_channels, config)
             kcs_future = executor.submit(search_kcs, query, max_results_per_source, config)
             sop_future = executor.submit(search_sop, query, max_results_per_source, config)
-            github_future = executor.submit(search_github, query, max_results_per_source, config)
             gitlab_future = executor.submit(search_gitlab, query, max_results_per_source, config)
 
             # Get results with error handling for each
@@ -1449,11 +1415,8 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
                 print(f"❌ SOP search exception: {e}")
                 sop_results = {"sops": [], "total": 0, "error": str(e)}
 
-            try:
-                github_results = github_future.result()
-            except Exception as e:
-                print(f"❌ GitHub search exception: {e}")
-                github_results = {"results": [], "total": 0, "error": str(e)}
+            # GitHub results come from ask-sre SOP merge below
+            github_results = {"results": [], "total": 0}
 
             try:
                 gitlab_results = gitlab_future.result()
@@ -1461,13 +1424,29 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
                 print(f"❌ GitLab search exception: {e}")
                 gitlab_results = {"results": [], "total": 0, "error": str(e)}
 
-        # Merge ask-sre SOP results into GitHub/GitLab/KCS by source type
+        # Merge ask-sre SOP results into GitHub/KCS by source type
+        # Both local_ops_sop (openshift/ops-sop) and managed_openshift_docs are GitHub repos
         if sop_results.get("sops"):
             for sop in sop_results["sops"]:
                 source_type = sop.get("source", "")
                 doc_text = sop.get("summary", "")[:300]
 
-                if source_type == "managed_openshift_docs":
+                if source_type == "local_ops_sop":
+                    github_results["results"].append({
+                        "name": sop.get("file_name", sop.get("title", "")),
+                        "path": sop.get("file_path", ""),
+                        "repository": "openshift/ops-sop",
+                        "url": f"https://github.com/openshift/ops-sop/blob/master/{sop.get('file_path', '')}",
+                        "score": sop.get("score", 0) * 1000,
+                        "language": "Markdown",
+                        "ask_sre": True,
+                        "similarity": sop.get("score", 0),
+                        "category": sop.get("category", ""),
+                        "severity": sop.get("severity", ""),
+                        "summary": doc_text,
+                        "service_name": sop.get("service_name", ""),
+                    })
+                elif source_type == "managed_openshift_docs":
                     github_results["results"].append({
                         "name": sop.get("file_name", sop.get("title", "")),
                         "path": sop.get("file_path", ""),
@@ -1480,19 +1459,6 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
                         "category": sop.get("category", ""),
                         "severity": sop.get("severity", ""),
                         "summary": doc_text,
-                    })
-                elif source_type == "local_ops_sop":
-                    gitlab_results["results"].append({
-                        "filename": sop.get("file_name", sop.get("title", "")),
-                        "path": sop.get("file_path", ""),
-                        "project_name": "openshift / ops-sop",
-                        "url": "",
-                        "ask_sre": True,
-                        "similarity": sop.get("score", 0),
-                        "category": sop.get("category", ""),
-                        "severity": sop.get("severity", ""),
-                        "summary": doc_text,
-                        "service_name": sop.get("service_name", ""),
                     })
                 elif source_type == "redhat_customer_portal":
                     kcs_results.setdefault("articles", []).append({

@@ -201,7 +201,7 @@ def authenticate_kerberos(username, password):
             text=True
         )
 
-        stdout, stderr = process.communicate(input=kinit_input, timeout=10)
+        stdout, stderr = process.communicate(input=kinit_input, timeout=30)
 
         if process.returncode == 0:
             logger.info(f"Kerberos authentication successful for {username}")

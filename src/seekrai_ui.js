@@ -3243,7 +3243,7 @@ function renderJiraResults(jira) {
     const headerElement = document.getElementById('jira-count');
     const filterElement = document.getElementById('filter-jira-count');
 
-    if (headerElement) headerElement.textContent = `OHSS Tickets (${count})`;
+    if (headerElement) headerElement.textContent = `Jira Tickets (${count})`;
     if (filterElement) filterElement.textContent = `(${count})`;
 
     if (!jira.issues || jira.issues.length === 0) {
@@ -3251,7 +3251,7 @@ function renderJiraResults(jira) {
         if (jira.error && jira.error.includes('credentials')) {
             section.innerHTML = `
                 <div class="no-results" style="padding: 20px; background: #fff3cd; border-left: 4px solid #ffc107; color: #856404;">
-                    <strong>⚠️ Jira/OHSS Search Not Available</strong>
+                    <strong>⚠️ Jira Search Not Available</strong>
                     <p style="margin-top: 8px;">Jira credentials are not configured. Please configure your Atlassian credentials in Settings.</p>
                     <a href="#" onclick="document.querySelector('.settings-btn').click(); return false;" style="color: #ee0000; text-decoration: underline;">Go to Settings</a>
                 </div>
@@ -3282,7 +3282,7 @@ function renderJiraResults(jira) {
                 <span><strong>Status:</strong> ${issue.status || 'Unknown'}</span>
                 <span><strong>Work Type:</strong> ${issue.work_type || issue.type || 'N/A'}</span>
             </div>
-            <a href="${issue.url}" target="_blank" class="view-link atlassian">View OHSS</a>
+            <a href="${issue.url}" target="_blank" class="view-link atlassian">View Jira</a>
         </div>
         `;
     }).join('');
@@ -3807,7 +3807,7 @@ function updateSectionHeader(source, displayedCount, totalCount) {
 
     console.log(`📊 Updating ${source}: displayed=${displayedCount}, total=${totalCount}`);
 
-    const section = document.querySelector(`[data-source="${source}"]`);
+    const section = document.querySelector(`.results-section[data-source="${source}"]`);
     if (!section) {
         console.warn(`⚠️ Section not found for source: ${source}`);
         return;
@@ -3815,14 +3815,8 @@ function updateSectionHeader(source, displayedCount, totalCount) {
 
     const header = section.querySelector('.section-title-text');
     if (header) {
-        console.log(`📝 Found header for ${source}, old text: "${header.textContent}"`);
-        // Extract the base text (e.g., "Salesforce Tickets") and add new count
         const baseText = header.textContent.replace(/\s*\(\d+\)\s*$/, '').trim();
         header.textContent = `${baseText} (${displayedCount})`;
-        console.log(`✅ Updated header for ${source}, new text: "${header.textContent}"`);
-    } else {
-        console.warn(`⚠️ Header span (.section-title-text) not found for source: ${source}`);
-        console.log('Available elements in section:', section.innerHTML.substring(0, 200));
     }
 
     // Update filter count in sidebar - ALSO show displayed count (same as section)
@@ -3982,7 +3976,7 @@ function showDetailPanel(resultData, source) {
 
     if (secondTab) {
         if (source === 'salesforce') {
-            secondTab.textContent = 'Linked OHSS ticket';
+            secondTab.textContent = 'Linked JIRA ticket';
             secondTab.style.display = 'block';
         } else if (source === 'ohss' || source === 'jira') {
             secondTab.textContent = 'Linked Salesforce ticket';
@@ -4887,12 +4881,12 @@ function showDetailPanel(resultData, source) {
         // Show the section label for Salesforce cases
         if (sectionLabel) {
             sectionLabel.style.display = 'block';
-            sectionLabel.textContent = 'External Trackers (OHSS)';
+            sectionLabel.textContent = 'External Trackers (JIRA)';
         }
 
         // Show placeholder - will load when tab is clicked
         if (trackersElement) {
-            trackersElement.innerHTML = '<p style="color: #666;">Click the "Linked OHSS ticket" tab to load external trackers</p>';
+            trackersElement.innerHTML = '<p style="color: #666;">Click the "Linked JIRA ticket" tab to load external trackers</p>';
             trackersElement.dataset.caseNumber = resultData.case_number;
             trackersElement.dataset.source = 'salesforce';
             trackersElement.dataset.loaded = 'false';
