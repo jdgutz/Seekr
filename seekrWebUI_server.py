@@ -8,6 +8,7 @@ Serves HTML pages and provides API endpoints for authentication and token manage
 from flask import Flask, request, jsonify, session, redirect, send_file, send_from_directory
 from flask_cors import CORS
 from datetime import datetime, timedelta
+import tempfile
 import requests
 import logging
 import os
