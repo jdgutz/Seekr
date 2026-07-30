@@ -14,6 +14,7 @@ import os
 import sys
 import subprocess
 import json
+import getpass
 from pathlib import Path
 
 # Configure logging
@@ -192,17 +193,21 @@ def authenticate_kerberos(username, password):
             kinit_input = pwd_part + '\n' + otp_part + '\n'
         else:
             kinit_input = password + '\n'
-
-        process = subprocess.Popen(
-            ['kinit', principal],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        stdout, stderr = process.communicate(input=kinit_input, timeout=30)
-
+       
+        #stdout, stderr = process.communicate(input=kinit_input, timeout=10)
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.tmp', delete=False) as f:
+            f.write(kinit_input)
+            tmpfile = f.name
+        try:
+            result = subprocess.run(
+                ['kinit', '--password-file=' + tmpfile, principal],
+                capture_output=True, text=True, timeout=10
+            )
+            stdout, stderr = result.stdout, result.stderr
+            process = result
+        finally:
+            os.unlink(tmpfile)
         if process.returncode == 0:
             logger.info(f"Kerberos authentication successful for {username}")
             subprocess.run(['kdestroy'], capture_output=True)
@@ -1044,24 +1049,21 @@ def test_slack_tokens():
             timeout=10
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('ok'):
-                return jsonify({
-                    'valid': True,
-                    'message': f"✅ Connected to {data.get('team', 'Slack workspace')}",
-                    'workspace_info': data
-                })
-            else:
-                return jsonify({
-                    'valid': False,
-                    'message': f"❌ Slack API error: {data.get('error', 'Unknown error')}"
-                }), 401
+        logger.info(f"Slack auth.test: status={response.status_code}, body={response.text[:300]}")
+
+        data = response.json()
+        if data.get('ok'):
+            return jsonify({
+                'valid': True,
+                'message': f"✅ Connected to {data.get('team', 'Slack workspace')}",
+                'workspace_info': data
+            })
         else:
+            error = data.get('error', 'Unknown error')
             return jsonify({
                 'valid': False,
-                'message': f'❌ HTTP error: {response.status_code}'
-            }), 400
+                'message': f"❌ Slack API error: {error}"
+            }), 401
 
     except requests.exceptions.Timeout:
         return jsonify({
@@ -1069,10 +1071,10 @@ def test_slack_tokens():
             'message': '❌ Connection timeout. Please try again.'
         }), 408
     except Exception as e:
-        logger.error(f"Slack token test error: {str(e)}")
+        logger.error(f"Slack token test error: {type(e).__name__}: {str(e)}")
         return jsonify({
             'valid': False,
-            'message': '❌ Could not connect to Slack API. Please check your network and try again.'
+            'message': f'❌ Error: {str(e)}'
         }), 400
 
 # ----------------------------------------------------------------------------
@@ -1343,7 +1345,8 @@ def test_gitlab_token():
             headers={
                 'PRIVATE-TOKEN': token
             },
-            timeout=10
+            timeout=10,
+            verify=False
         )
 
         logger.info(f"GitLab API response status: {response.status_code}")

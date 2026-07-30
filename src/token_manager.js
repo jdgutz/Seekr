@@ -514,6 +514,7 @@ async function testGitLabToken() {
         const response = await fetch('/api/settings/test-gitlab-token', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
+            credentials: 'include',
             body: JSON.stringify({token, url})
         });
 
