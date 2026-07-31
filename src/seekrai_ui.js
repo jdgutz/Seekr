@@ -2626,6 +2626,33 @@ const SEVERITY_RANK = {
     '4 (low)': 4, '4': 4, 'low': 4
 };
 
+// Score a KCS article by product relevance to managed OpenShift (ROSA/ARO/HCP/OSD).
+// 0 = priority product, 1 = generic/unknown, 2 = unrelated product
+function getKCSProductScore(article) {
+    const text = [
+        article.title || '',
+        article.documentTitle || '',
+        article.product || '',
+        article.summary || '',
+    ].join(' ').toLowerCase();
+
+    // Use word-boundary regex to avoid false matches (e.g. 'aro' inside 'workaround')
+    const PRIORITY_PATTERNS = [
+        /\brosa\b/, /\baro\b/, /\bhcp\b/, /hosted control plane/,
+        /openshift service on aws/, /azure red hat openshift/,
+        /openshift dedicated/, /\bosd\b/, /managed openshift/,
+    ];
+    const UNRELATED_PATTERNS = [
+        /openstack/, /red hat satellite/, /satellite [67]/, /\bmicroshift\b/,
+        /\bansible\b/, /enterprise linux/, /\brhel\b/, /\bvirtualization\b/,
+        /\bceph\b/, /\brhosp\b/,
+    ];
+
+    if (PRIORITY_PATTERNS.some(p => p.test(text))) return 0;
+    if (UNRELATED_PATTERNS.some(p => p.test(text))) return 2;
+    return 1;
+}
+
 function applySortToResults() {
     const results = window.lastSearchResults;
     if (!results) return;
@@ -2682,9 +2709,21 @@ function applySortToResults() {
         if (results.sfdc?.cases) results.sfdc.cases.sort((a, b) => a._originalIndex - b._originalIndex);
         if (results.jira?.issues) results.jira.issues.sort((a, b) => a._originalIndex - b._originalIndex);
         if (results.slack?.messages) results.slack.messages.sort((a, b) => a._originalIndex - b._originalIndex);
-        if (results.kcs?.articles) results.kcs.articles.sort((a, b) => a._originalIndex - b._originalIndex);
         if (results.github?.results) results.github.results.sort((a, b) => a._originalIndex - b._originalIndex);
         if (results.gitlab?.results) results.gitlab.results.sort((a, b) => a._originalIndex - b._originalIndex);
+
+        // KCS: product-boosted relevance sort
+        // Score 0 = ROSA/ARO/HCP/OSD (highest priority)
+        // Score 1 = generic OpenShift / unknown
+        // Score 2 = unrelated products (OpenStack, Satellite, RHEL, etc.)
+        if (results.kcs?.articles) {
+            results.kcs.articles.sort((a, b) => {
+                const scoreA = getKCSProductScore(a);
+                const scoreB = getKCSProductScore(b);
+                if (scoreA !== scoreB) return scoreA - scoreB;
+                return a._originalIndex - b._originalIndex; // stable: preserve API order within same group
+            });
+        }
     }
 
     // Reset pagination to page 1 after re-sort
@@ -2761,6 +2800,16 @@ function displaySearchResults(results, query) {
     if (results.kcs?.articles) results.kcs.articles.forEach((item, i) => item._originalIndex = i);
     if (results.github?.results) results.github.results.forEach((item, i) => item._originalIndex = i);
     if (results.gitlab?.results) results.gitlab.results.forEach((item, i) => item._originalIndex = i);
+
+    // Apply product-boosted sort to KCS before first render
+    if (results.kcs?.articles) {
+        results.kcs.articles.sort((a, b) => {
+            const scoreA = getKCSProductScore(a);
+            const scoreB = getKCSProductScore(b);
+            if (scoreA !== scoreB) return scoreA - scoreB;
+            return a._originalIndex - b._originalIndex;
+        });
+    }
 
     // Reset sort dropdown to Relevance for new searches
     const sortSelect = document.querySelector('.sort-select');
