@@ -3344,6 +3344,7 @@ function renderJiraResults(jira) {
                 </div>
             </div>
             <div class="result-meta" style="display: flex; gap: 20px; margin: 8px 0; font-size: 14px; color: #666;">
+                <span><strong>Project:</strong> ${issue.project_name || issue.project || 'N/A'}</span>
                 <span><strong>Priority:</strong> ${issue.priority || 'N/A'}</span>
                 <span><strong>Status:</strong> ${issue.status || 'Unknown'}</span>
                 <span><strong>Work Type:</strong> ${issue.work_type || issue.type || 'N/A'}</span>
@@ -4751,9 +4752,13 @@ function showDetailPanel(resultData, source) {
                         if (cached.slack_threads && cached.slack_threads.length > 0) {
                             updateRelatedSlackThreads(cached.slack_threads);
                         }
+                        if (cached.icm_tickets && cached.icm_tickets.length > 0) {
+                            updateRelatedICMTickets(cached.icm_tickets);
+                        }
                         if ((!cached.kcs_articles || cached.kcs_articles.length === 0) &&
                             (!cached.redhat_docs || cached.redhat_docs.length === 0) &&
-                            (!cached.slack_threads || cached.slack_threads.length === 0)) {
+                            (!cached.slack_threads || cached.slack_threads.length === 0) &&
+                            (!cached.icm_tickets || cached.icm_tickets.length === 0)) {
                             const relatedItems = detailPanel.querySelector('.related-items');
                             if (relatedItems) {
                                 relatedItems.innerHTML = '<p style="color: #666; padding: 1rem;">No related content found in case comments</p>';
@@ -4771,7 +4776,8 @@ function showDetailPanel(resultData, source) {
                                 relatedContentCache.ohss[cacheKey] = {
                                     kcs_articles: data.kcs_articles || [],
                                     redhat_docs: data.redhat_docs || [],
-                                    slack_threads: data.slack_threads || []
+                                    slack_threads: data.slack_threads || [],
+                                    icm_tickets: data.icm_tickets || []
                                 };
 
                                 if (data.kcs_articles && data.kcs_articles.length > 0) {
@@ -4783,9 +4789,13 @@ function showDetailPanel(resultData, source) {
                                 if (data.slack_threads && data.slack_threads.length > 0) {
                                     updateRelatedSlackThreads(data.slack_threads);
                                 }
+                                if (data.icm_tickets && data.icm_tickets.length > 0) {
+                                    updateRelatedICMTickets(data.icm_tickets);
+                                }
                                 if ((!data.kcs_articles || data.kcs_articles.length === 0) &&
                                     (!data.redhat_docs || data.redhat_docs.length === 0) &&
-                                    (!data.slack_threads || data.slack_threads.length === 0)) {
+                                    (!data.slack_threads || data.slack_threads.length === 0) &&
+                                    (!data.icm_tickets || data.icm_tickets.length === 0)) {
                                     const relatedItems = detailPanel.querySelector('.related-items');
                                     if (relatedItems) {
                                         relatedItems.innerHTML = '<p style="color: #666; padding: 1rem;">No related content found in case comments</p>';
@@ -5106,6 +5116,12 @@ function showDetailPanel(resultData, source) {
                     if (data.slack_threads && Array.isArray(data.slack_threads) && data.slack_threads.length > 0) {
                         console.log(`✅ Found ${data.slack_threads.length} Slack threads in SFDC case comments`);
                         updateRelatedSlackThreads(data.slack_threads);
+                    }
+
+                    // Update ICM Tickets from SFDC case comments
+                    if (data.icm_tickets && Array.isArray(data.icm_tickets) && data.icm_tickets.length > 0) {
+                        console.log(`✅ Found ${data.icm_tickets.length} ICM tickets in SFDC case comments`);
+                        updateRelatedICMTickets(data.icm_tickets);
                     }
                 }
             })
@@ -5833,6 +5849,63 @@ function updateRelatedSOPLinks(githubLinks) {
 
     if (sopTab && sopTab.classList.contains('active')) {
         sopTab.click();
+    }
+}
+
+// Update Related Content ICM Tickets
+function updateRelatedICMTickets(icmTickets) {
+    const relatedTabs = document.querySelector('.related-tabs');
+    if (!relatedTabs) return;
+
+    let icmTab = document.querySelector('.related-tab[data-content="icm"]');
+
+    if (!icmTab && icmTickets.length > 0) {
+        icmTab = document.createElement('button');
+        icmTab.className = 'related-tab';
+        icmTab.setAttribute('data-content', 'icm');
+        relatedTabs.appendChild(icmTab);
+
+        if (relatedTabs.children.length === 1) {
+            icmTab.classList.add('active');
+        }
+    }
+
+    if (icmTab) {
+        icmTab.textContent = `ICM Tickets (${icmTickets.length})`;
+
+        if (!icmTab.dataset.listenerAdded) {
+            icmTab.addEventListener('click', () => {
+                document.querySelectorAll('.related-tab').forEach(t => t.classList.remove('active'));
+                icmTab.classList.add('active');
+
+                const relatedItemsContainer = document.querySelector('.related-items');
+                if (relatedItemsContainer) {
+                    if (icmTickets.length > 0) {
+                        relatedItemsContainer.innerHTML = icmTickets.map(ticket => `
+                            <a href="${ticket.url}" target="_blank" class="related-item">
+                                <img src="/src/images/icm-logo.png" class="related-icon" alt="ICM" />
+                                <div class="related-info">
+                                    <div class="related-title">${ticket.title}</div>
+                                    <div class="related-subtitle">Microsoft ICM Portal</div>
+                                </div>
+                                <svg class="external-link" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M12 2h2v2M14 2L8 8M6 3H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-2"/>
+                                </svg>
+                            </a>
+                        `).join('');
+                    } else {
+                        relatedItemsContainer.innerHTML = '<p style="color: #666; padding: 16px;">No ICM tickets found</p>';
+                    }
+                }
+            });
+            icmTab.dataset.listenerAdded = 'true';
+        }
+    }
+
+    window.relatedICMContent = icmTickets;
+
+    if (icmTab && icmTab.classList.contains('active')) {
+        icmTab.click();
     }
 }
 
