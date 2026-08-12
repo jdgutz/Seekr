@@ -422,16 +422,17 @@ def search():
         query = data.get('query', '')
         logger.info(f"Search request from {session['username']}: query='{query}'")
 
-        # Prepare config with tokens from session (key names match user_tokens.json)
+        # Prepare config with tokens from session, falling back to persistent storage
+        saved = get_user_token_data(session['username'])
         config = {
-            'redhat_token': session.get('redhat_token', ''),
-            'atlassian_token': session.get('atlassian_token', ''),
-            'atlassian_email': session.get('atlassian_email', ''),
-            'slack_xoxc': session.get('slack_xoxc', ''),
-            'slack_xoxd': session.get('slack_xoxd', ''),
-            'github_token': session.get('github_token', ''),
-            'gitlab_token': session.get('gitlab_token', ''),
-            'gitlab_url': session.get('gitlab_url', 'https://gitlab.cee.redhat.com')
+            'redhat_token': session.get('redhat_token', '') or saved.get('redhat_token', ''),
+            'atlassian_token': session.get('atlassian_token', '') or saved.get('atlassian_token', ''),
+            'atlassian_email': session.get('atlassian_email', '') or saved.get('atlassian_email', ''),
+            'slack_xoxc': session.get('slack_xoxc', '') or saved.get('slack_xoxc', ''),
+            'slack_xoxd': session.get('slack_xoxd', '') or saved.get('slack_xoxd', ''),
+            'github_token': session.get('github_token', '') or saved.get('github_token', ''),
+            'gitlab_token': session.get('gitlab_token', '') or saved.get('gitlab_token', ''),
+            'gitlab_url': session.get('gitlab_url', '') or saved.get('gitlab_url', 'https://gitlab.cee.redhat.com')
         }
 
         # Log token status

@@ -542,71 +542,139 @@ def search_kcs(query: str, max_results: int = 20, config: Dict = None) -> Dict:
             "Content-Type": "application/json"
         }
 
-        data = {
-            "q": query,
-            "rows": max_results,
-            "expression": "sort=score%20DESC&fq=documentKind%3A(%22Article%22%20OR%20%22Solution%22)%20AND%20accessState%3A(%22active%22%20OR%20%22private%22)&fl=allTitle%2CcaseCount%2CdocumentKind%2Cid%2Cscore%2Curi%2Cresource_uri%2Cview_uri%2Cenvironment%2Cissue%2Cresolution%2CverificationState%2CpublishState%2CmodifiedDate&showRetired=false",
-            "start": 0,
-            "clientName": "unified-search"
-        }
+        KCS_EXPRESSION = "sort=score%20DESC&fq=documentKind%3A(%22Article%22%20OR%20%22Solution%22)%20AND%20accessState%3A(%22active%22%20OR%20%22private%22)&fl=allTitle%2CcaseCount%2CdocumentKind%2Cid%2Cscore%2Curi%2Cresource_uri%2Cview_uri%2Cenvironment%2Cissue%2Cresolution%2CverificationState%2CpublishState%2CmodifiedDate&showRetired=false"
 
-        # Retry up to 2 times for SSL errors
-        for attempt in range(2):
-            try:
-                response = requests.post(
-                    f"{SFDC_API_BASE}/hydra/rest/search/v2/kcs",
-                    headers=headers,
-                    json=data,
-                    timeout=30,
-                    verify=True
-                )
-                response.raise_for_status()
-                result = response.json()
-                break
-            except requests.exceptions.SSLError as ssl_err:
-                if attempt == 0:
-                    print(f"KCS SSL error on attempt {attempt + 1}, retrying... {ssl_err}")
-                    continue
-                else:
-                    raise
+        def _kcs_api_call(q, rows):
+            """Make a single KCS API call and return list of docs."""
+            data = {
+                "q": q,
+                "rows": rows,
+                "expression": KCS_EXPRESSION,
+                "start": 0,
+                "clientName": "unified-search"
+            }
+            for attempt in range(2):
+                try:
+                    resp = requests.post(
+                        f"{SFDC_API_BASE}/hydra/rest/search/v2/kcs",
+                        headers=headers,
+                        json=data,
+                        timeout=30,
+                        verify=True
+                    )
+                    resp.raise_for_status()
+                    r = resp.json()
+                    return r.get("response", {}).get("docs", []), r.get("response", {}).get("numFound", 0)
+                except requests.exceptions.SSLError as ssl_err:
+                    if attempt == 0:
+                        print(f"KCS SSL error on attempt {attempt + 1}, retrying... {ssl_err}")
+                        continue
+                    else:
+                        raise
+            return [], 0
+
+        PRODUCT_TERMS = {
+            'aro': 'ARO',
+            'rosa': 'ROSA',
+            'osd': 'OSD',
+            'hcp': '"hosted control plane"',
+        }
+        PRODUCT_DETECT = {
+            'aro': ['aro', 'azure red hat openshift'],
+            'rosa': ['rosa', 'red hat openshift service on aws'],
+            'osd': ['osd', 'openshift dedicated'],
+            'hcp': ['hcp', 'hosted control plane'],
+        }
+        query_lower = query.lower()
+        has_product = any(
+            any(k in query_lower for k in keywords)
+            for keywords in PRODUCT_DETECT.values()
+        )
+
+        if has_product:
+            # Query already has a product term — single search
+            docs, total_found = _kcs_api_call(query, max_results)
         else:
-            raise Exception("Failed after retries")
+            # No product in query — search per product, then merge
+            # Product-specific results first, generic results fill remaining slots
+            print(f"🔍 KCS: Searching per managed product for: {query}")
+            seen_ids = set()
+            product_docs = []
+            for prod, term in PRODUCT_TERMS.items():
+                result_docs, _ = _kcs_api_call(f'{query} {term}', 5)
+                for doc in result_docs:
+                    doc_id = doc.get("id", "")
+                    if doc_id not in seen_ids:
+                        seen_ids.add(doc_id)
+                        product_docs.append(doc)
+                print(f"  📦 KCS {prod}: {len(result_docs)} results, {len(product_docs)} unique so far")
+
+            # Fill remaining with generic results
+            base_docs, total_found = _kcs_api_call(query, max_results)
+            base_unique = []
+            for doc in base_docs:
+                doc_id = doc.get("id", "")
+                if doc_id not in seen_ids:
+                    seen_ids.add(doc_id)
+                    base_unique.append(doc)
+
+            docs = (product_docs + base_unique)[:max_results]
+            print(f"🔍 KCS: Merged {len(product_docs)} product-specific + {len(base_unique)} generic = {len(docs)} articles")
 
         articles = []
-        if "response" in result and "docs" in result["response"]:
-            for doc in result["response"]["docs"]:
-                # Debug: Print all available fields for the first article
-                if len(articles) == 0:
-                    print(f"📋 KCS API fields available: {list(doc.keys())}")
-                    print(f"🔍 Environment field: '{doc.get('environment')}'")
-                    print(f"🔍 Issue field: '{doc.get('issue')}'")
-                    print(f"🔍 Resolution field: '{doc.get('resolution')}'")
-                    # Check for alternative field names
-                    env_fields = [k for k in doc.keys() if 'env' in k.lower() or 'product' in k.lower() or 'platform' in k.lower()]
-                    if env_fields:
-                        print(f"🔍 Possible environment fields: {env_fields}")
-                        for field in env_fields:
-                            print(f"   - {field}: {doc.get(field)}")
+        for doc in docs:
+            article = {
+                "id": doc.get("id", "N/A"),
+                "title": doc.get("allTitle", "No title"),
+                "document_kind": doc.get("documentKind", "Article"),
+                "score": doc.get("score", 0),
+                "view_uri": doc.get("view_uri", ""),
+                "url": doc.get("view_uri", "#"),
+                "environment": doc.get("environment", ""),
+                "issue": doc.get("issue", ""),
+                "resolution": doc.get("resolution", ""),
+                "verification_state": doc.get("verificationState", doc.get("publishState", "N/A")),
+                "publish_state": doc.get("publishState", "N/A"),
+                "modified_date": doc.get("modifiedDate", "N/A")
+            }
+            articles.append(article)
 
-                article = {
-                    "id": doc.get("id", "N/A"),
-                    "title": doc.get("allTitle", "No title"),
-                    "document_kind": doc.get("documentKind", "Article"),
-                    "score": doc.get("score", 0),
-                    "view_uri": doc.get("view_uri", ""),
-                    "url": doc.get("view_uri", "#"),
-                    "environment": doc.get("environment", ""),
-                    "issue": doc.get("issue", ""),
-                    "resolution": doc.get("resolution", ""),
-                    "verification_state": doc.get("verificationState", doc.get("publishState", "N/A")),
-                    "publish_state": doc.get("publishState", "N/A"),
-                    "modified_date": doc.get("modifiedDate", "N/A")
-                }
-                articles.append(article)
+        def _to_str(val):
+            if isinstance(val, list):
+                return ' '.join(str(v) for v in val)
+            return str(val) if val else ''
+
+        # Product-aware sorting: prioritize articles matching the queried product
+        PRODUCT_PATTERNS = {
+            'aro': ['aro', 'azure red hat openshift'],
+            'rosa': ['rosa', 'red hat openshift service on aws'],
+            'osd': ['osd', 'openshift dedicated'],
+            'hcp': ['hcp', 'hosted control plane'],
+        }
+        query_lower = query.lower()
+        query_products = [p for p, keywords in PRODUCT_PATTERNS.items()
+                          if any(k in query_lower for k in keywords)]
+
+        if query_products:
+            def _article_product_match(article):
+                text = ' '.join([
+                    _to_str(article.get('environment', '')),
+                    _to_str(article.get('title', '')),
+                    _to_str(article.get('issue', ''))
+                ]).lower()
+                for qp in query_products:
+                    if any(k in text for k in PRODUCT_PATTERNS[qp]):
+                        return 0  # matching product → top
+                return 1  # non-matching → bottom
+
+            articles.sort(key=lambda a: (_article_product_match(a), -a.get('score', 0)))
+            matched = sum(1 for a in articles if _article_product_match(a) == 0)
+            print(f"🔍 KCS product sort: query products={query_products}, "
+                  f"{matched}/{len(articles)} articles match")
 
         return {
             "articles": articles,
-            "total": result.get("response", {}).get("numFound", 0)
+            "total": total_found
         }
 
     except Exception as e:
@@ -627,7 +695,7 @@ def call_ask_sre(tool_name: str, arguments: Dict, timeout: int = 30) -> List[Dic
     Returns a list of result dicts on success, empty list on failure."""
     global _mcp_session_id
 
-    mcp_endpoint = f"{MCP_SERVER_URL}/mcp/"
+    mcp_endpoint = f"{MCP_SERVER_URL}/mcp"
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
@@ -707,7 +775,13 @@ def call_ask_sre(tool_name: str, arguments: Dict, timeout: int = 30) -> List[Dic
             print(f"⚠️ ask-sre error: {parsed['error']}")
             return []
 
-        content = parsed.get("result", {}).get("content", [])
+        result_obj = parsed.get("result", {})
+        if result_obj.get("isError"):
+            error_text = result_obj.get("content", [{}])[0].get("text", "Unknown error")
+            print(f"⚠️ ask-sre tool error: {error_text}")
+            return []
+
+        content = result_obj.get("content", [])
         results = []
         for item in content:
             if item.get("type") == "text":
@@ -801,69 +875,221 @@ def _keyword_search_sop_db(query: str, limit: int = 20) -> List[Dict]:
         return []
 
 
-def search_sop(query: str, max_results: int = 20, config: Dict = None) -> Dict:
-    """Search SOP documents via ask-sre semantic search + keyword fallback"""
+OPS_SOP_LOCAL_PATH = os.getenv("OPS_SOP_PATH", os.path.expanduser("~/ops-sop"))
+
+_WORD_BOUNDARY_CACHE = {}
+
+def _word_in_text(word: str, text: str) -> bool:
+    """Word-boundary-aware matching.
+    Long words (>=6 chars): substring match — specific enough to avoid false positives.
+    Short words (<6 chars): require word boundary so 'repo' won't match 'report'."""
+    variants = {word, word.replace("-",""), word.replace("_","")}
+    if len(word) > 5:
+        for j in range(3, len(word) - 2):
+            variants.add(word[:j] + "-" + word[j:])
+    for v in variants:
+        if len(v) >= 6:
+            if v in text:
+                return True
+        else:
+            if v not in _WORD_BOUNDARY_CACHE:
+                _WORD_BOUNDARY_CACHE[v] = re.compile(r'(?<![a-z])' + re.escape(v) + r'(?![a-z])')
+            if _WORD_BOUNDARY_CACHE[v].search(text):
+                return True
+    return False
+
+
+def _search_ops_sop_local(query: str, limit: int = 20) -> List[Dict]:
+    """Search local ops-sop clone for keyword matches in markdown files."""
     try:
-        # Request extra results to account for deduplication across chunks
-        top_k = min(max(max_results * 3, 30), 60)
+        if not os.path.isdir(OPS_SOP_LOCAL_PATH):
+            return []
 
-        raw_results = call_ask_sre("search_sre_docs", {
-            "problem_statement": query,
-            "max_results": top_k
-        })
-
-        if not raw_results:
-            raw_results = []
-
-        # Deduplicate by file_path — keep the chunk with the highest similarity
-        seen = {}
         query_words = [w.lower() for w in query.split() if len(w) > 2]
+        if not query_words:
+            return []
+
+        # Build grep variants: "breakglass" also matches "break-glass", "break_glass"
+        grep_variants = set(query_words)
+        for w in query_words:
+            if len(w) > 5:
+                for i in range(3, len(w) - 2):
+                    grep_variants.add(w[:i] + "-" + w[i:])
+                    grep_variants.add(w[:i] + "_" + w[i:])
+            grep_variants.add(w.replace("-", ""))
+            grep_variants.add(w.replace("_", ""))
+
+        grep_pattern = "\\|".join(grep_variants)
+        result = subprocess.run(
+            ["grep", "-ril", "--include=*.md", grep_pattern, OPS_SOP_LOCAL_PATH],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode not in (0, 1):
+            return []
+
+        scored = []
+        for filepath in result.stdout.strip().split("\n"):
+            if not filepath.strip():
+                continue
+            rel_path = os.path.relpath(filepath, OPS_SOP_LOCAL_PATH)
+            if rel_path.startswith("."):
+                continue
+
+            try:
+                with open(filepath, 'r', errors='ignore') as f:
+                    content = f.read(2000)
+            except Exception:
+                content = ""
+
+            content_lower = content.lower()
+            path_lower = rel_path.lower()
+
+            # Weight words by length — longer words are more specific and matter more
+            content_weight = sum(len(w) for w in query_words if _word_in_text(w, content_lower))
+            path_weight = sum(len(w) for w in query_words if _word_in_text(w, path_lower))
+            total_weight = sum(len(w) for w in query_words)
+            any_match = max(content_weight, path_weight) > 0
+            if not any_match:
+                continue
+
+            title_line = ""
+            for line in content.split("\n"):
+                stripped = line.strip().lstrip("#").strip()
+                if stripped:
+                    title_line = stripped
+                    break
+
+            content_coverage = content_weight / total_weight
+            path_coverage = path_weight / total_weight
+            score = (content_coverage * 0.5) + (path_coverage * 0.5)
+            scored.append({
+                "file_path": rel_path,
+                "source": "local_ops_sop",
+                "title": title_line or rel_path.split("/")[-1],
+                "file_name": os.path.basename(rel_path),
+                "summary": content[:500],
+                "document_text": content,
+                "score": score,
+                "category": rel_path.split("/")[0] if "/" in rel_path else "",
+                "severity": "",
+                "service_name": "",
+            })
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        print(f"✅ ops-sop local search: {len(scored)} files matched, returning top {limit}")
+        return scored[:limit]
+
+    except Exception as e:
+        print(f"⚠️ ops-sop local search error: {e}")
+        return []
+
+
+def search_sop(query: str, max_results: int = 20, config: Dict = None) -> Dict:
+    """Search SOP documents: keyword search on ops-sop (primary) + ask-sre semantic (supplement)"""
+    try:
+        query_words = [w.lower() for w in query.split() if len(w) > 2]
+        keyword_variants = set(query_words)
+        for w in query_words:
+            keyword_variants.add(w.replace("-", ""))
+            keyword_variants.add(w.replace("_", ""))
+            keyword_variants.add(w.replace("-", "").replace("_", ""))
+
+        seen = {}
+
+        # Run keyword search and semantic search in parallel
+        top_k = min(max(max_results * 3, 30), 60)
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            kw_future = ex.submit(_search_ops_sop_local, query, max_results)
+            sem_future = ex.submit(call_ask_sre, "search_sre_docs", {"problem_statement": query, "max_results": top_k})
+            db_future = ex.submit(_keyword_search_sop_db, query, 10)
+
+            ops_sop_results = kw_future.result()
+            raw_results = sem_future.result() or []
+            keyword_results = db_future.result()
+
+        # === PRIMARY: Local ops-sop keyword search (most accurate for exact matches) ===
+        for osr in ops_sop_results:
+            file_path = osr.get("file_path", "")
+            source = osr.get("source", "local_ops_sop")
+            dedup_key = f"{source}:{file_path}"
+            base_score = osr.get("score", 0)
+            seen[dedup_key] = {
+                "id": "N/A",
+                "title": osr.get("title", "No title"),
+                "summary": osr.get("summary", "")[:500],
+                "document_text": osr.get("document_text", osr.get("summary", "")),
+                "score": 1.0 + base_score,
+                "category": osr.get("category", ""),
+                "severity": osr.get("severity", ""),
+                "source": source,
+                "file_path": file_path,
+                "file_name": osr.get("file_name", ""),
+                "service_name": osr.get("service_name", ""),
+                "url": ""
+            }
+
+        keyword_count = len(seen)
+
+        # === SUPPLEMENT: Ask-sre semantic search (broader coverage) ===
         for result in raw_results:
-            if "note" in result or not result.get("similarity"):
+            if result.get("note") or result.get("message") or result.get("error"):
                 continue
 
             file_path = result.get("file_path", "")
+            if not file_path:
+                continue
+
             source = result.get("source", "")
             dedup_key = f"{source}:{file_path}"
             similarity = result.get("similarity", 0)
+            distance = result.get("distance", 0)
+            if similarity <= 0 and distance > 0:
+                similarity = max(0.01, 1.0 / (1.0 + distance))
 
-            # Boost score when query words appear in the file name or path
-            path_lower = file_path.lower()
-            keyword_matches = sum(1 for w in query_words if w in path_lower)
-            boosted_score = similarity + (keyword_matches * 0.15)
+            title = result.get("title", "") or file_path.split("/")[-1]
+            file_name = result.get("file_name", "") or file_path.split("/")[-1]
+            doc_text = (result.get("document_text", "") or "")[:500]
+
+            # Score semantic results by keyword coverage (word-boundary-aware, length-weighted)
+            combined = (file_path + " " + title + " " + doc_text).lower()
+            hit_weight = sum(len(w) for w in query_words if _word_in_text(w, combined))
+            total_w = sum(len(w) for w in query_words)
+            if hit_weight > 0 and total_w > 0:
+                word_coverage = min(1.0, hit_weight / total_w)
+                boosted_score = 1.0 + (word_coverage * 0.5) + (similarity * 0.5)
+            else:
+                boosted_score = similarity
 
             if dedup_key not in seen or boosted_score > seen[dedup_key]["score"]:
                 seen[dedup_key] = {
                     "id": result.get("id", "N/A"),
-                    "title": result.get("title", "No title"),
-                    "summary": (result.get("document_text", "") or "")[:500],
+                    "title": title,
+                    "summary": doc_text,
+                    "document_text": result.get("document_text", "") or "",
                     "score": boosted_score,
-                    "category": result.get("category", ""),
+                    "category": result.get("category", "") or result.get("log_type", ""),
                     "severity": result.get("severity", ""),
                     "source": source,
                     "file_path": file_path,
-                    "file_name": result.get("file_name", ""),
+                    "file_name": file_name,
                     "service_name": result.get("service_name", ""),
                     "url": ""
                 }
 
-        # Supplement with keyword search from PostgreSQL for exact matches
-        keyword_results = _keyword_search_sop_db(query, limit=10)
+        # === SUPPLEMENT: PostgreSQL keyword search ===
         for kr in keyword_results:
             file_path = kr.get("file_path", "")
             source = kr.get("source", "")
             dedup_key = f"{source}:{file_path}"
 
             if dedup_key not in seen:
-                path_lower = file_path.lower()
-                keyword_matches = sum(1 for w in query_words if w in path_lower)
-                # Keyword-only results get a base score + path match bonus
-                score = 0.05 + (keyword_matches * 0.15)
                 seen[dedup_key] = {
                     "id": "N/A",
                     "title": kr.get("title", "No title"),
                     "summary": kr.get("summary", "")[:500],
-                    "score": score,
+                    "document_text": kr.get("document_text", kr.get("summary", "")),
+                    "score": 0.5,
                     "category": kr.get("category", ""),
                     "severity": kr.get("severity", ""),
                     "source": source,
@@ -873,10 +1099,10 @@ def search_sop(query: str, max_results: int = 20, config: Dict = None) -> Dict:
                     "url": ""
                 }
 
-        # Sort by boosted score and return top results
+        # Sort by score and return top results
         sops = sorted(seen.values(), key=lambda x: x["score"], reverse=True)[:max_results]
 
-        print(f"✅ ask-sre: {len(raw_results)} semantic + {len(keyword_results)} keyword → {len(seen)} unique → {len(sops)} returned")
+        print(f"✅ search: {keyword_count} keyword + {len(raw_results)} semantic + {len(keyword_results)} db → {len(seen)} unique → {len(sops)} returned")
         return {
             "sops": sops,
             "total": len(sops)
@@ -1266,7 +1492,7 @@ def fetch_slack_thread(channel_id: str, thread_ts: str, config: Dict = None) -> 
 GITLAB_GROUPS = ['mcs', 'service']
 
 def search_gitlab(query: str, max_results: int = 20, config: Dict = None) -> Dict:
-    """Search GitLab mcs and service group repos using project-level blob search (file content)."""
+    """Search GitLab mcs and service group repos via project name + file tree matching."""
     try:
         if config is None:
             config = {}
@@ -1283,77 +1509,105 @@ def search_gitlab(query: str, max_results: int = 20, config: Dict = None) -> Dic
             return {'results': [], 'total': 0, 'error': 'Search query must be at least 3 characters'}
 
         headers = {'PRIVATE-TOKEN': gitlab_token}
-        results = []
+        query_words = [w.lower() for w in query.split() if len(w) > 2]
+        skip_words = {'gitlab', 'github', 'repo', 'search'}
+        query_words = [w for w in query_words if w not in skip_words] or [w.lower() for w in query.split() if len(w) > 2]
 
-        # Step 1: Get projects from all configured groups
-        projects = []
-        for group in GITLAB_GROUPS:
-            group_url = f'{gitlab_url}/api/v4/groups/{group}/projects'
+        # Step 1: Get ALL projects from both groups (parallel)
+        def list_group_projects(group):
+            found = []
             try:
-                resp = requests.get(group_url, headers=headers, params={'per_page': 50, 'simple': 'true', 'order_by': 'last_activity_at'}, timeout=15, verify=False)
+                resp = requests.get(
+                    f'{gitlab_url}/api/v4/groups/{group}/projects',
+                    headers=headers,
+                    params={'per_page': 100, 'simple': 'true', 'order_by': 'last_activity_at'},
+                    timeout=15, verify=False)
                 if resp.status_code == 200:
-                    group_projects = resp.json()
-                    projects.extend(group_projects)
-                    print(f"📊 GitLab: Found {len(group_projects)} projects in {group} group")
-                else:
-                    print(f"⚠️ GitLab: Failed to list {group} projects: {resp.status_code}")
+                    for p in resp.json():
+                        p['_group'] = group
+                        found.append(p)
+                    print(f"📊 GitLab: {len(found)} projects in {group} group")
             except Exception as e:
-                print(f"⚠️ GitLab: Error listing {group} projects: {e}")
+                print(f"⚠️ GitLab: Error listing {group}: {e}")
+            return found
 
-        if not projects:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            group_futures = [ex.submit(list_group_projects, g) for g in GITLAB_GROUPS]
+            all_projects = []
+            seen_ids = set()
+            for f in group_futures:
+                for p in f.result():
+                    if p['id'] not in seen_ids:
+                        seen_ids.add(p['id'])
+                        all_projects.append(p)
+
+        if not all_projects:
             return {'results': [], 'total': 0, 'error': 'No projects found in mcs/service groups'}
 
-        print(f"📊 GitLab: Searching file content across {len(projects)} total projects...")
-
-        # Step 2: Search file content in each project using project-level blob search (parallel)
-        def search_project_blobs(project):
-            proj_id = project.get('id')
+        # Step 2: Search file trees across ALL projects (parallel)
+        def search_project_tree(project):
+            proj_id = project['id']
             proj_path = project.get('path_with_namespace', '')
             proj_name = project.get('name_with_namespace', project.get('name', ''))
             default_branch = project.get('default_branch', 'main')
+            group = project.get('_group', proj_path.split('/')[0] if '/' in proj_path else '')
 
+            proj_results = []
             try:
-                search_url = f'{gitlab_url}/api/v4/projects/{proj_id}/search'
-                resp = requests.get(search_url, headers=headers,
-                                    params={'scope': 'blobs', 'search': query, 'per_page': 5},
-                                    timeout=10, verify=False)
+                resp = requests.get(
+                    f'{gitlab_url}/api/v4/projects/{proj_id}/repository/tree',
+                    headers=headers,
+                    params={'per_page': 100, 'recursive': 'true'},
+                    timeout=10, verify=False)
                 if resp.status_code != 200:
                     return []
 
-                proj_results = []
-                for blob in resp.json():
-                    file_path = blob.get('path', blob.get('filename', ''))
-                    filename = file_path.split('/')[-1] if file_path else ''
-                    ref = blob.get('ref', default_branch)
-                    file_url = f"{gitlab_url}/{proj_path}/-/blob/{ref}/{file_path}"
+                proj_name_lower = proj_path.lower()
+                proj_name_match = sum(len(w) for w in query_words if w in proj_name_lower)
+                total_weight = sum(len(w) for w in query_words)
 
-                    proj_results.append({
-                        'filename': filename,
-                        'path': file_path,
-                        'project_id': proj_id,
-                        'project_name': proj_name,
-                        'ref': ref,
-                        'url': file_url,
-                        'summary': blob.get('data', '')[:300],
-                        'startline': blob.get('startline', 0),
-                        'priority': True,
-                    })
-                return proj_results
+                for item in resp.json():
+                    if item['type'] != 'blob':
+                        continue
+                    fpath = item['path']
+                    fname = fpath.split('/')[-1]
+                    fpath_lower = fpath.lower()
+
+                    file_match = sum(len(w) for w in query_words if w in fpath_lower)
+                    score = (proj_name_match + file_match) / total_weight if total_weight else 0
+
+                    if proj_name_match > 0 or file_match > 0:
+                        file_url = f"{gitlab_url}/{proj_path}/-/blob/{default_branch}/{fpath}"
+                        proj_results.append({
+                            'filename': fname,
+                            'path': fpath,
+                            'project_id': proj_id,
+                            'project_name': proj_name,
+                            'project_path': proj_path,
+                            'group': group,
+                            'ref': default_branch,
+                            'url': file_url,
+                            'summary': '',
+                            'startline': 0,
+                            'score': score,
+                            'priority': True,
+                        })
             except Exception:
-                return []
+                pass
+            return proj_results
 
+        results = []
         from concurrent.futures import as_completed
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(search_project_blobs, p): p for p in projects}
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(search_project_tree, p): p for p in all_projects}
             for future in as_completed(futures):
-                proj_results = future.result()
-                if proj_results:
-                    results.extend(proj_results)
-                if len(results) >= max_results:
-                    break
+                results.extend(future.result())
 
+        # Sort: mcs group first, then service, then by score within each group
+        group_priority = {'mcs': 0, 'service': 1}
+        results.sort(key=lambda r: (group_priority.get(r.get('group', ''), 9), -r.get('score', 0)))
         results = results[:max_results]
-        print(f"✅ GitLab: Found {len(results)} results across mcs projects")
+        print(f"✅ GitLab: {len(results)} results (mcs + service, from {len(all_projects)} projects)")
         return {'results': results, 'total': len(results)}
 
     except requests.exceptions.ConnectionError:
@@ -1431,7 +1685,10 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
         if sop_results.get("sops"):
             for sop in sop_results["sops"]:
                 source_type = sop.get("source", "")
-                doc_text = sop.get("summary", "")[:300]
+                full_text = sop.get("document_text", "") or sop.get("summary", "")
+                doc_text = full_text[:300]
+                content_lines = full_text.split('\n')[:20]
+                file_content = '\n'.join(content_lines)
 
                 if source_type == "local_ops_sop":
                     github_results["results"].append({
@@ -1446,6 +1703,8 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
                         "category": sop.get("category", ""),
                         "severity": sop.get("severity", ""),
                         "summary": doc_text,
+                        "file_content": file_content,
+                        "total_lines": len(full_text.split('\n')),
                         "service_name": sop.get("service_name", ""),
                     })
                 elif source_type == "managed_openshift_docs":
@@ -1461,6 +1720,8 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
                         "category": sop.get("category", ""),
                         "severity": sop.get("severity", ""),
                         "summary": doc_text,
+                        "file_content": file_content,
+                        "total_lines": len(full_text.split('\n')),
                     })
                 elif source_type == "redhat_customer_portal":
                     kcs_results.setdefault("articles", []).append({
@@ -1472,6 +1733,29 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
                         "similarity": sop.get("score", 0),
                         "category": sop.get("category", ""),
                     })
+                elif source_type == "managed_notifications":
+                    github_results["results"].append({
+                        "name": sop.get("file_name", sop.get("title", "")),
+                        "path": sop.get("file_path", ""),
+                        "repository": "openshift/managed-notifications",
+                        "url": f"https://github.com/openshift/managed-notifications/blob/master/{sop.get('file_path', '')}",
+                        "score": max(0.01, sop.get("score", 0)) * 1000,
+                        "language": "JSON",
+                        "ask_sre": True,
+                        "similarity": sop.get("score", 0),
+                        "category": sop.get("category", ""),
+                        "severity": sop.get("severity", ""),
+                        "summary": doc_text,
+                        "file_content": file_content,
+                        "total_lines": len(full_text.split('\n')),
+                        "service_name": sop.get("service_name", ""),
+                    })
+
+            # Sort GitHub results: ops-sop first, then by score
+            repo_priority = {"openshift/ops-sop": 0, "openshift/openshift-docs": 1, "openshift/managed-notifications": 2}
+            github_results["results"].sort(
+                key=lambda r: (repo_priority.get(r.get("repository", ""), 9), -r.get("score", 0))
+            )
 
             # Update totals
             github_results["total"] = len(github_results.get("results", []))
@@ -1498,6 +1782,11 @@ def search_all(query: str, max_results_per_source: int = 20, slack_channels: Lis
 # ============================================================================
 # Flask Routes
 # ============================================================================
+
+@app.route('/')
+def index():
+    return jsonify({'status': 'ok'}), 200
+
 
 @app.route('/debug')
 def debug():
@@ -2073,7 +2362,7 @@ def get_slack_thread():
 
 @app.route('/api/github-file-content', methods=['POST'])
 def github_file_content():
-    """Fetch first 20 lines of a GitHub file"""
+    """Fetch first 20 lines of a GitHub file — reads local clone first, falls back to API"""
     try:
         data = request.get_json()
         repository = data.get('repository')
@@ -2082,18 +2371,30 @@ def github_file_content():
         if not repository or not path:
             return jsonify({'success': False, 'error': 'Missing repository or path'}), 400
 
-        # Get GitHub token from config
+        # For openshift/ops-sop, read directly from local clone (fast, no token needed)
+        if repository == 'openshift/ops-sop':
+            local_file = os.path.join(OPS_SOP_LOCAL_PATH, path)
+            if os.path.isfile(local_file):
+                with open(local_file, 'r', errors='ignore') as f:
+                    content = f.read()
+                lines = content.split('\n')[:20]
+                return jsonify({
+                    'success': True,
+                    'content': '\n'.join(lines),
+                    'total_lines': len(content.split('\n'))
+                })
+
+        # Fall back to GitHub API for other repos
         config = data.get('config', get_config())
         github_token = config.get('github_token', os.getenv('GITHUB_TOKEN', ''))
 
         if not github_token:
             return jsonify({'success': False, 'error': 'GitHub token not configured'}), 401
 
-        # Fetch file content from GitHub API
         url = f'https://api.github.com/repos/{repository}/contents/{path}'
         headers = {
             'Authorization': f'token {github_token}',
-            'Accept': 'application/vnd.github.v3.raw'  # Get raw file content
+            'Accept': 'application/vnd.github.v3.raw'
         }
 
         response = requests.get(url, headers=headers, timeout=10)
@@ -2103,14 +2404,12 @@ def github_file_content():
 
         response.raise_for_status()
 
-        # Get first 20 lines
         content = response.text
         lines = content.split('\n')[:20]
-        preview = '\n'.join(lines)
 
         return jsonify({
             'success': True,
-            'content': preview,
+            'content': '\n'.join(lines),
             'total_lines': len(content.split('\n'))
         })
 
@@ -2148,14 +2447,13 @@ def gitlab_file_content():
             'ref': ref
         }
 
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=10, verify=False)
 
         if response.status_code == 404:
             return jsonify({'success': False, 'error': 'File not found'}), 404
 
         response.raise_for_status()
 
-        # Get first 20 lines
         content = response.text
         lines = content.split('\n')[:20]
         preview = '\n'.join(lines)
@@ -3022,7 +3320,7 @@ if __name__ == '__main__':
     print("  • Result counts in sidebar")
     print("  • Clean, unified interface\n")
     print("Prerequisites:")
-    print("  • MCP Server for SOP search: cd kush/mcp-server/mcp-server && ./start_server.sh")
+    print("  • MCP Server for SOP search: ask-sre server must be running on MCP_SERVER_URL")
     print("  • Set MCP_SERVER_URL env var (default: http://localhost:8000)\n")
     print("Press CTRL+C to stop")
     print("=" * 70 + "\n")

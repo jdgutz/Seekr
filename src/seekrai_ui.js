@@ -1554,7 +1554,7 @@ async function fetchFileDescription(resultData, source) {
     const descriptionElement = document.querySelector('.description-content');
     if (!descriptionElement) return;
 
-    if (resultData.ask_sre && resultData.summary) {
+    if (resultData.ask_sre && resultData.repository !== 'openshift/ops-sop' && resultData.summary) {
         descriptionElement.textContent = resultData.summary;
         descriptionElement.style.color = '#333';
         return;
@@ -1582,12 +1582,10 @@ async function fetchFileDescription(resultData, source) {
 
         console.log(`🔍 Fetching ${isGitHub ? 'GitHub' : 'GitLab'} file content:`, payload);
 
-        // The endpoint uses session tokens from the backend, so no need to pass config
-        // The backend proxy (seekrWebUI_server.py) will forward the request with session tokens
         const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',  // Include session cookies to get tokens from backend session
+            credentials: 'include',
             body: JSON.stringify(payload)
         });
 
@@ -1596,19 +1594,28 @@ async function fetchFileDescription(resultData, source) {
 
         if (data.success) {
             descriptionElement.textContent = data.content;
-            descriptionElement.style.color = '#333';
+            descriptionElement.style.cssText = 'color: #333; white-space: pre-wrap; font-family: "Courier New", monospace; font-size: 0.85rem; line-height: 1.5;';
 
-            // Show repository info message
-            const infoText = document.createElement('p');
-            infoText.style.cssText = 'color: #666; font-style: italic; margin-top: 1rem; font-size: 0.875rem;';
-            infoText.textContent = 'View full repository for complete details';
-            descriptionElement.parentNode.appendChild(infoText);
+            if (data.total_lines && data.total_lines > 20) {
+                const infoText = document.createElement('p');
+                infoText.style.cssText = 'color: #666; font-style: italic; margin-top: 1rem; font-size: 0.875rem;';
+                infoText.textContent = 'View the full repository for complete details';
+                descriptionElement.parentNode.appendChild(infoText);
+            }
+        } else if (resultData.ask_sre && resultData.summary) {
+            descriptionElement.textContent = resultData.summary;
+            descriptionElement.style.color = '#333';
         } else {
             descriptionElement.innerHTML = `<em style="color: #999;">Unable to load file preview: ${data.error}</em>`;
         }
     } catch (error) {
         console.error('❌ Error fetching file description:', error);
-        descriptionElement.innerHTML = `<em style="color: #999;">Unable to load file preview: ${error.message}</em>`;
+        if (resultData.ask_sre && resultData.summary) {
+            descriptionElement.textContent = resultData.summary;
+            descriptionElement.style.color = '#333';
+        } else {
+            descriptionElement.innerHTML = `<em style="color: #999;">Unable to load file preview: ${error.message}</em>`;
+        }
     }
 }
 
@@ -1651,6 +1658,15 @@ function extractProductTag(productString) {
         return 'osd';
     }
 
+    // Short-form fallbacks (word-boundary match to avoid false positives)
+    if (/\baro\b/.test(productLower) && !productLower.includes('workaround')) return 'aro';
+    if (/\brosa\b/.test(productLower)) return 'rosa';
+    if (/\bosd\b/.test(productLower)) return 'osd';
+    if (/\bhcp\b/.test(productLower)) return 'rosa-hcp';
+
+    // Generic OpenShift Container Platform — applies to all managed products
+    if (/openshift container platform|rhocp|\bocp\b/.test(productLower)) return 'ocp';
+
     return null;  // No matching product
 }
 
@@ -1672,7 +1688,10 @@ function updateProductCounts() {
     itemsWithProduct.forEach(item => {
         const product = item.getAttribute('data-product');
         console.log(`  - Item has product: ${product}`);
-        if (productCounts.hasOwnProperty(product)) {
+        if (product === 'ocp') {
+            // Generic OCP articles count under all managed products
+            ['aro', 'aro-hcp', 'osd', 'rosa', 'rosa-hcp'].forEach(p => productCounts[p]++);
+        } else if (productCounts.hasOwnProperty(product)) {
             productCounts[product]++;
         }
     });
@@ -1690,8 +1709,8 @@ function updateProductCounts() {
         }
     });
 
-    // Update "Select All" count
-    const totalCount = Object.values(productCounts).reduce((sum, count) => sum + count, 0);
+    // Update "Select All" count (use unique items, not inflated sum from OCP counting under all products)
+    const totalCount = itemsWithProduct.length;
     const selectAllCheckbox = document.querySelector('.select-all-products');
     if (selectAllCheckbox) {
         const countSpan = selectAllCheckbox.parentElement.querySelector('.filter-count');
@@ -1742,7 +1761,11 @@ function filterResultsByProduct() {
                     item.style.display = 'block';
                 }
                 else if (itemProduct) {
-                    item.style.display = checkedProducts.includes(itemProduct) ? 'block' : 'none';
+                    // Generic OCP articles apply to all managed products
+                    const matches = itemProduct === 'ocp'
+                        ? checkedProducts.some(p => ['aro', 'aro-hcp', 'osd', 'rosa', 'rosa-hcp'].includes(p))
+                        : checkedProducts.includes(itemProduct);
+                    item.style.display = matches ? 'block' : 'none';
                 }
                 else {
                     item.style.display = 'block';
@@ -2506,6 +2529,12 @@ async function performSearch() {
 
         console.log('🔍 Searching with selected sources:', selectedSources);
 
+        // Strip auto-detected source keywords from query before sending to API
+        const SOURCE_KEYWORDS = ['kcs', 'sfdc', 'salesforce', 'jira', 'ohss', 'slack', 'github', 'gitlab', 'sop', 'repo'];
+        const cleanedQuery = query.split(/\s+/)
+            .filter(w => !SOURCE_KEYWORDS.includes(w.toLowerCase()))
+            .join(' ').trim() || query;
+
         // Call the search API via proxy (same origin, no CORS issues)
         const response = await fetch('/api/search', {
             method: 'POST',
@@ -2514,7 +2543,7 @@ async function performSearch() {
             },
             credentials: 'include',  // Include session cookies
             body: JSON.stringify({
-                query: query,
+                query: cleanedQuery,
                 max_results: 20,
                 sources: selectedSources  // Include selected sources
             })
@@ -2626,18 +2655,23 @@ const SEVERITY_RANK = {
     '4 (low)': 4, '4': 4, 'low': 4
 };
 
-// Score a KCS article by product relevance to managed OpenShift (ROSA/ARO/HCP/OSD).
-// 0 = priority product, 1 = generic/unknown, 2 = unrelated product
-function getKCSProductScore(article) {
+// Score a KCS article by product relevance.
+// When query mentions a specific product (ARO, ROSA, OSD, HCP), articles for that
+// product get score 0, other managed OpenShift products get score 1, unrelated get 3.
+function getKCSProductScore(article, query) {
+    const toStr = f => Array.isArray(f) ? f.join(' ') : (f || '');
     const text = [
-        article.title || '',
-        article.documentTitle || '',
-        article.product || '',
-        article.summary || '',
-    ].join(' ').toLowerCase();
+        article.title, article.documentTitle, article.product,
+        article.summary, article.environment, article.issue,
+    ].map(toStr).join(' ').toLowerCase();
 
-    // Use word-boundary regex to avoid false matches (e.g. 'aro' inside 'workaround')
-    const PRIORITY_PATTERNS = [
+    const PRODUCT_MAP = {
+        aro: [/\baro\b/, /azure red hat openshift/],
+        rosa: [/\brosa\b/, /openshift service on aws/],
+        osd: [/\bosd\b/, /openshift dedicated/],
+        hcp: [/\bhcp\b/, /hosted control plane/],
+    };
+    const MANAGED_PATTERNS = [
         /\brosa\b/, /\baro\b/, /\bhcp\b/, /hosted control plane/,
         /openshift service on aws/, /azure red hat openshift/,
         /openshift dedicated/, /\bosd\b/, /managed openshift/,
@@ -2646,9 +2680,26 @@ function getKCSProductScore(article) {
         /openstack/, /red hat satellite/, /satellite [67]/, /\bmicroshift\b/,
         /\bansible\b/, /enterprise linux/, /\brhel\b/, /\bvirtualization\b/,
         /\bceph\b/, /\brhosp\b/,
+        /openshift\s+3\b/, /\bocp\s+3\b/, /openshift enterprise/,
     ];
 
-    if (PRIORITY_PATTERNS.some(p => p.test(text))) return 0;
+    const q = (query || '').toLowerCase();
+    const queryProducts = Object.keys(PRODUCT_MAP).filter(p =>
+        PRODUCT_MAP[p].some(r => r.test(q))
+    );
+
+    if (queryProducts.length > 0) {
+        const matchesQueried = queryProducts.some(p =>
+            PRODUCT_MAP[p].some(r => r.test(text))
+        );
+        if (matchesQueried) return 0;
+        if (MANAGED_PATTERNS.some(p => p.test(text))) return 1;
+        if (UNRELATED_PATTERNS.some(p => p.test(text))) return 3;
+        return 2;
+    }
+
+    // No specific product in query — managed first, unrelated last
+    if (MANAGED_PATTERNS.some(p => p.test(text))) return 0;
     if (UNRELATED_PATTERNS.some(p => p.test(text))) return 2;
     return 1;
 }
@@ -2712,16 +2763,16 @@ function applySortToResults() {
         if (results.github?.results) results.github.results.sort((a, b) => a._originalIndex - b._originalIndex);
         if (results.gitlab?.results) results.gitlab.results.sort((a, b) => a._originalIndex - b._originalIndex);
 
-        // KCS: product-boosted relevance sort
-        // Score 0 = ROSA/ARO/HCP/OSD (highest priority)
-        // Score 1 = generic OpenShift / unknown
-        // Score 2 = unrelated products (OpenStack, Satellite, RHEL, etc.)
+        // KCS: query-aware product sort
+        // When query mentions a specific product (e.g. "aro"), that product's articles
+        // come first, then other managed OpenShift, then generic, then unrelated
         if (results.kcs?.articles) {
+            const currentQuery = results.query || window.lastSearchQuery || '';
             results.kcs.articles.sort((a, b) => {
-                const scoreA = getKCSProductScore(a);
-                const scoreB = getKCSProductScore(b);
+                const scoreA = getKCSProductScore(a, currentQuery);
+                const scoreB = getKCSProductScore(b, currentQuery);
                 if (scoreA !== scoreB) return scoreA - scoreB;
-                return a._originalIndex - b._originalIndex; // stable: preserve API order within same group
+                return a._originalIndex - b._originalIndex;
             });
         }
     }
@@ -2803,9 +2854,10 @@ function displaySearchResults(results, query) {
 
     // Apply product-boosted sort to KCS before first render
     if (results.kcs?.articles) {
+        const q = query || results.query || '';
         results.kcs.articles.sort((a, b) => {
-            const scoreA = getKCSProductScore(a);
-            const scoreB = getKCSProductScore(b);
+            const scoreA = getKCSProductScore(a, q);
+            const scoreB = getKCSProductScore(b, q);
             if (scoreA !== scoreB) return scoreA - scoreB;
             return a._originalIndex - b._originalIndex;
         });
@@ -3113,17 +3165,22 @@ function getPaginatedItems(items, source) {
     if (source === 'sfdc' && window.activeProductFilters && window.activeProductFilters.size > 0) {
         filteredItems = items.filter(item => {
             const productTag = extractProductTag(item.product);
-            return productTag && window.activeProductFilters.has(productTag);
+            if (!productTag) return false;
+            if (productTag === 'ocp') return true;
+            return window.activeProductFilters.has(productTag);
         });
     }
 
-    // Prioritize known products (ROSA, ARO, OSD, etc.) to the top for SFDC
+    // Prioritize managed products (ROSA, ARO, OSD, etc.) to the top for SFDC — OCP stays unprioritized
     if (source === 'sfdc') {
+        const MANAGED_TAGS = new Set(['aro', 'aro-hcp', 'osd', 'rosa', 'rosa-hcp']);
         filteredItems = [...filteredItems].sort((a, b) => {
             const aTag = extractProductTag(a.product);
             const bTag = extractProductTag(b.product);
-            if (aTag && !bTag) return -1;
-            if (!aTag && bTag) return 1;
+            const aManaged = aTag && MANAGED_TAGS.has(aTag);
+            const bManaged = bTag && MANAGED_TAGS.has(bTag);
+            if (aManaged && !bManaged) return -1;
+            if (!aManaged && bManaged) return 1;
             return 0;
         });
     }
@@ -3141,7 +3198,9 @@ function getFilteredItemCount(items, source) {
     if (source === 'sfdc' && window.activeProductFilters && window.activeProductFilters.size > 0) {
         return items.filter(item => {
             const productTag = extractProductTag(item.product);
-            return productTag && window.activeProductFilters.has(productTag);
+            if (!productTag) return false;
+            if (productTag === 'ocp') return true;
+            return window.activeProductFilters.has(productTag);
         }).length;
     }
 
@@ -3698,8 +3757,15 @@ function renderKCSResults(kcs) {
 
     section.innerHTML = paginatedArticles.map((article, index) => {
         const articleId = article.id || article.documentKind;
+        const kcsProductText = [
+            article.environment || '',
+            article.title || '',
+            article.issue || ''
+        ].flat().join(' ');
+        const kcsProductTag = extractProductTag(kcsProductText);
+        const kcsProductAttr = kcsProductTag ? `data-product="${kcsProductTag}"` : '';
         return `
-        <div class="result-item" data-kcs-index="${index}" data-kcs-id="${articleId}">
+        <div class="result-item" data-kcs-index="${index}" data-kcs-id="${articleId}" ${kcsProductAttr}>
             <div class="result-header" style="margin-bottom: 0; border: none; border-bottom: none;">
                 <div class="result-title" style="border: none; border-bottom: none; margin-bottom: 0;">
                     <img src="/src/images/Logo-Red_Hat-Hat_icon-Standard-RGB.svg" class="result-icon kcs-logo" alt="Red Hat" />
@@ -3801,7 +3867,6 @@ function renderGitHubResults(github) {
                     ${item.repository || 'Unknown repo'} / ${item.name || 'unknown file'}
                 </div>
             </div>
-            ${item.language && item.language !== 'N/A' && item.language !== 'Unknown' ? `<div class="result-meta"><span class="badge">${item.language}</span></div>` : ''}
             <div class="result-path">${item.path || ''}</div>
             <a href="${cleanUrl}" target="_blank" class="view-link github-view">View on GitHub</a>
         </div>
@@ -4398,7 +4463,7 @@ function showDetailPanel(resultData, source) {
                 path: resultData.path || 'N/A',
                 branch: resultData.ref || 'main',
                 language: resultData.language || 'N/A',
-                description: resultData.content_snippet || resultData.description || 'No description available'
+                description: resultData.content_snippet || resultData.summary || resultData.description || 'No description available'
             };
 
             // Completely replace the overview tab content
@@ -4655,7 +4720,9 @@ function showDetailPanel(resultData, source) {
                             <div class="kcs-section-text">${formatKCSContent(fullArticle.issue || resultData.issue || fullArticle.abstract || 'No issue description available')}</div>
                         </div>
 
-                        <div class="kcs-action-buttons" style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+                        <p style="color: #666; font-style: italic; margin-top: 1.25rem; font-size: 0.875rem;">View the full KCS article for complete details</p>
+
+                        <div class="kcs-action-buttons" style="display: flex; gap: 0.75rem; margin-top: 1rem;">
                             <a href="${articleUrl}" target="_blank" class="view-link">View Full KCS Article</a>
                             <button class="view-link copy-kcs-link-btn" onclick="copyKCSLink(this)" data-url="${articleUrl}">
                                 Copy KCS Article Link
@@ -4685,11 +4752,9 @@ function showDetailPanel(resultData, source) {
                             <div class="kcs-section-text">${formatKCSContent(resultData.issue || resultData.abstract || 'No issue description available')}</div>
                         </div>
 
-                        <div class="kcs-section" style="margin-top: 1rem;">
-                            <p style="color: #999;">Unable to load full article details. <a href="${articleUrl}" target="_blank">View full article</a></p>
-                        </div>
+                        <p style="color: #666; font-style: italic; margin-top: 1.25rem; font-size: 0.875rem;">View the full KCS article for complete details</p>
 
-                        <div class="kcs-action-buttons" style="display: flex; gap: 0.75rem; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #e0e0e0;">
+                        <div class="kcs-action-buttons" style="display: flex; gap: 0.75rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e0e0e0;">
                             <a href="${articleUrl}" target="_blank" class="view-link">View Full KCS Article</a>
                             <button class="view-link copy-kcs-link-btn" onclick="copyKCSLink(this)" data-url="${articleUrl}">
                                 Copy KCS Article Link
