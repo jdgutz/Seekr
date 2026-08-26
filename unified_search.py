@@ -264,6 +264,74 @@ def search_sfdc(query: str, max_results: int = 20, config: Dict = None) -> Dict:
 
 
 # ============================================================================
+# Jira Project Detection
+# ============================================================================
+
+BIGRAM_PROJECT_MAP = {
+    'support exception':  ['SUPPORTEX'],
+    'support exceptions': ['SUPPORTEX'],
+    'feature request':    ['RFE'],
+    'feature requests':   ['RFE'],
+    'ocp bug':            ['OCPBUGS'],
+    'ocp bugs':           ['OCPBUGS'],
+}
+
+PRODUCT_PROJECT_MAP = {
+    # Tier 1 — Product keywords
+    'rosa':       ['ROSAENG', 'OHSS', 'OCPBUGS', 'OCM'],
+    'aro':        ['ARO', 'OCPBUGS'],
+    'osd':        ['OHSS', 'OCPBUGS'],
+    'hypershift': ['ROSAENG', 'OCPBUGS'],
+    'hcp':        ['ROSAENG', 'OHSS'],
+    'ocm':        ['OCM', 'ROSAENG'],
+
+    # Tier 2 — Explicit project key words
+    'ocpbugs':   ['OCPBUGS'],
+    'supportex': ['SUPPORTEX'],
+    'rfe':       ['RFE'],
+    'hpstrat':   ['HPSTRAT'],
+    'ohss':      ['OHSS'],
+}
+
+TIER1_KEYWORDS = {'rosa', 'aro', 'osd', 'hypershift', 'hcp', 'ocm'}
+
+
+def detect_product_projects(query: str):
+    """
+    Returns (projects_list, remaining_words).
+    Detection order: Bigrams → Tier 1 → Tier 2 → None (all projects).
+    """
+    words_clean = [w.lower().strip('.,:-') for w in query.split()]
+    raw_words   = query.split()
+
+    # Step 1: Bigram check
+    for i in range(len(words_clean) - 1):
+        bigram = f"{words_clean[i]} {words_clean[i+1]}"
+        if bigram in BIGRAM_PROJECT_MAP:
+            projects  = BIGRAM_PROJECT_MAP[bigram]
+            remaining = [raw_words[j] for j in range(len(raw_words)) if j not in (i, i+1)]
+            return projects, remaining
+
+    # Step 2: Tier 1 — product keywords
+    for i, word in enumerate(words_clean):
+        clean = ''.join(c for c in word if c.isalpha())
+        if clean in TIER1_KEYWORDS:
+            projects  = PRODUCT_PROJECT_MAP[clean]
+            remaining = [raw_words[j] for j in range(len(raw_words)) if j != i]
+            return projects, remaining
+
+    # Step 3: Tier 2 — explicit project keys
+    for i, word in enumerate(words_clean):
+        clean = ''.join(c for c in word if c.isalpha())
+        if clean in PRODUCT_PROJECT_MAP:
+            projects  = PRODUCT_PROJECT_MAP[clean]
+            remaining = [raw_words[j] for j in range(len(raw_words)) if j != i]
+            return projects, remaining
+
+    return None, query.split()
+
+
+# ============================================================================
 # Jira Functions
 # ============================================================================
 
@@ -328,34 +396,50 @@ def search_jira(query: str, max_results: int = 20, config: Dict = None, created_
         "Accept": "application/json"
     }
 
+    # Default: no project detection (only set in the text-search branch below)
+    detected_projects = None
+
     # Use custom JQL if provided, otherwise generate automatically
     if custom_jql:
         jql = custom_jql
         app.logger.info(f"🔍 Jira Custom JQL: {jql}")
         # Don't modify custom JQL - use it exactly as provided
     else:
-        # Enhanced JQL query with multiple search strategies
         # 1. Check if query is a Jira key (e.g., OHSS-54143, SRE-1234)
-        if '-' in query and query.replace('-', '').replace(' ', '').isalnum():
-            # Looks like a Jira key, search by key first
+        # Must be a single token: LETTERS-NUMBERS only, no spaces.
+        # Prevents "aro control-plane resize" from matching due to hyphen.
+        if re.match(r'^[A-Za-z]+-\d+$', query.strip()):
             jql = f'key = "{query.strip()}" OR text ~ "{query}"'
             print(f"🔍 Jira JQL (key search): {jql}")
         else:
-            # Regular text search with better word matching
-            # Split query into words and search for any word match
-            words = query.split()
-            if len(words) > 1:
-                significant_words = [word for word in words if len(word) > 2]
-                separator = f' {search_logic} '
-                word_conditions = separator.join([f'text ~ "{word}"' for word in significant_words])
-                # OHSS tickets use OR logic so partial matches surface; other projects use the user's logic
-                ohss_or_conditions = ' OR '.join([f'text ~ "{word}"' for word in significant_words])
-                jql = f'(project = OHSS AND ({ohss_or_conditions})) OR ({word_conditions})'
-                print(f"🔍 Jira JQL (multi-word, OHSS-boosted): {jql}")
+            detected_projects, search_words = detect_product_projects(query)
+            significant_words = [w for w in search_words if len(w) > 2] or search_words
+
+            # Safeguard: remaining words all too short → fall back to full query
+            if not significant_words:
+                jql = f'summary ~ "{query}"'
+                print(f"🔍 Jira JQL (empty significant_words safeguard): {jql}")
+
+            elif len(significant_words) == 1:
+                summary_cond = f'summary ~ "{significant_words[0]}"'
+                if detected_projects:
+                    proj_keys = ', '.join(f'"{p}"' for p in detected_projects)
+                    jql = f'project in ({proj_keys}) AND {summary_cond}'
+                    print(f"🔍 Jira JQL (project-scoped {detected_projects}, single word): {jql}")
+                else:
+                    jql = summary_cond
+                    print(f"🔍 Jira JQL (all-projects, single word): {jql}")
+
             else:
-                # Single word search
-                jql = f'text ~ "{query}"'
-                print(f"🔍 Jira JQL (single word): {jql}")
+                # Multiple words: summary ~ per word (AND, not phrase — avoids adjacency requirement)
+                summary_cond = ' AND '.join([f'summary ~ "{w}"' for w in significant_words])
+                if detected_projects:
+                    proj_keys = ', '.join(f'"{p}"' for p in detected_projects)
+                    jql = f'project in ({proj_keys}) AND {summary_cond}'
+                    print(f"🔍 Jira JQL (project-scoped {detected_projects}): {jql}")
+                else:
+                    jql = summary_cond
+                    print(f"🔍 Jira JQL (all-projects): {jql}")
 
         # Add date filters if provided
         date_filters = []
@@ -386,34 +470,14 @@ def search_jira(query: str, max_results: int = 20, config: Dict = None, created_
             resp.raise_for_status()
             return resp.json()
 
-        # Two parallel searches: OHSS-specific (OR logic) + general search
-        words = query.split()
-        significant_words = [w for w in words if len(w) > 2]
-        if significant_words and len(words) > 1:
-            ohss_or_conditions = ' OR '.join([f'text ~ "{w}"' for w in significant_words])
-            ohss_jql = f'project = OHSS AND ({ohss_or_conditions})'
-        elif significant_words:
-            ohss_jql = f'project = OHSS AND text ~ "{query}"'
-        else:
-            ohss_jql = None
+        # Single unified query — project-aware JQL above handles scoping.
+        # Removed separate OHSS OR query: redundant and caused OHSS to flood
+        # results regardless of query intent.
+        general_data = _jira_api_call(jql, max_results)
+        app.logger.info(f"📊 Jira results: {len(general_data.get('issues', []))}")
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            general_future = executor.submit(_jira_api_call, jql, max_results)
-            ohss_future = executor.submit(_jira_api_call, ohss_jql, max_results) if ohss_jql else None
-
-        general_data = general_future.result()
-        ohss_data = ohss_future.result() if ohss_future else {"issues": []}
-
-        app.logger.info(f"📊 Jira general results: {len(general_data.get('issues', []))}, OHSS results: {len(ohss_data.get('issues', []))}")
-
-        # Merge: OHSS results first, then general (deduplicate by key)
         seen_keys = set()
         all_raw_issues = []
-        for issue in ohss_data.get('issues', []):
-            key = issue.get('key', '')
-            if key not in seen_keys:
-                seen_keys.add(key)
-                all_raw_issues.append(issue)
         for issue in general_data.get('issues', []):
             key = issue.get('key', '')
             if key not in seen_keys:
@@ -503,15 +567,26 @@ def search_jira(query: str, max_results: int = 20, config: Dict = None, created_
 
         app.logger.info(f"✅ Parsed {len(issues)} issues from Jira API")
 
-        # Sort: OHSS tickets first, then by created date (newest first)
-        # Use stable sort: first by date, then by project
-        try:
-            issues.sort(key=lambda x: x['created'], reverse=True)  # Step 1: newest first
-            issues.sort(key=lambda x: 0 if x['is_ohss'] else 1)    # Step 2: OHSS first (stable sort)
-            app.logger.info(f"✅ Sorted {len(issues)} issues successfully")
-        except Exception as sort_err:
-            app.logger.error(f"❌ Sorting failed: {sort_err}")
-            # Don't fail - just return unsorted
+        # Determine priority project based on what was detected:
+        #   rosa / hcp / osd → OHSS first
+        #   aro              → ARO first
+        #   others / no-match → trust Jira relevance (no sort)
+        # Stable sort — Jira relevance order preserved within each group.
+        priority_project = None
+        if detected_projects:
+            if 'OHSS' in detected_projects:
+                priority_project = 'OHSS'
+            elif 'ARO' in detected_projects:
+                priority_project = 'ARO'
+
+        if priority_project:
+            try:
+                issues.sort(key=lambda x: 0 if x['project'] == priority_project else 1)
+                app.logger.info(f"✅ {priority_project} sorted first ({len(issues)} issues)")
+            except Exception as sort_err:
+                app.logger.error(f"❌ Sorting failed: {sort_err}")
+        else:
+            app.logger.info(f"✅ Returning {len(issues)} issues in Jira relevance order")
 
         return {
             "issues": issues,
