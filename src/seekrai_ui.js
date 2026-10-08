@@ -4269,9 +4269,32 @@ function showDetailPanel(resultData, source) {
         sbtElement.textContent = 'Loading...';
         document.getElementById('detail-sbr').textContent = 'Loading...';  // SBR
 
-        // Lazy load full case details (use relative URL to avoid CORS)
-        fetch(`/api/sfdc/case/${resultData.case_number}`)
-            .then(response => response.json())
+        // Store case details Promise cache to prevent duplicate API calls
+        const caseNumber = resultData.case_number;
+        if (!window.sfdcCaseDetailsPromises) {
+            window.sfdcCaseDetailsPromises = {};
+        }
+
+        // Create or reuse the fetch promise (prevents race condition)
+        if (!window.sfdcCaseDetailsPromises[caseNumber]) {
+            window.sfdcCaseDetailsPromises[caseNumber] = fetch(`/api/sfdc/case/${caseNumber}`)
+                .then(response => response.json())
+                .then(details => {
+                    console.log(`✅ Loaded SFDC case details for ${caseNumber}`);
+                    return details;
+                })
+                .catch(error => {
+                    console.error(`❌ Error loading SFDC case details for ${caseNumber}:`, error);
+                    // Remove failed promise so it can be retried
+                    delete window.sfdcCaseDetailsPromises[caseNumber];
+                    throw error;
+                });
+        }
+
+        // Store the promise for description section to reuse
+        resultData._detailsPromise = window.sfdcCaseDetailsPromises[caseNumber];
+
+        window.sfdcCaseDetailsPromises[caseNumber]
             .then(details => {
                 // Update all the enriched fields from lazy load
                 document.getElementById('detail-owner').textContent = details.owner || 'N/A';
@@ -4880,17 +4903,25 @@ function showDetailPanel(resultData, source) {
                 // Show loading state initially
                 restoredSectionText.textContent = 'Loading...';
 
-                // Fetch full description from API
-                fetch(`/api/sfdc/case/${resultData.case_number}`)
-                    .then(response => response.json())
-                    .then(details => {
-                        // Update description with fetched data
-                        restoredSectionText.textContent = details.description || 'No description available';
-                    })
-                    .catch(error => {
-                        console.error('Error loading SFDC case description:', error);
-                        restoredSectionText.textContent = resultData.description || 'Error loading description';
-                    });
+                // Reuse the SAME promise from metadata section (prevents duplicate API call)
+                const caseNumber = resultData.case_number;
+                const detailsPromise = resultData._detailsPromise || window.sfdcCaseDetailsPromises?.[caseNumber];
+
+                if (detailsPromise) {
+                    // Use the shared promise - NO duplicate API call!
+                    detailsPromise
+                        .then(details => {
+                            restoredSectionText.textContent = details.description || 'No description available';
+                        })
+                        .catch(error => {
+                            console.error('Error loading SFDC case description:', error);
+                            restoredSectionText.textContent = resultData.description || 'Error loading description';
+                        });
+                } else {
+                    // Fallback (shouldn't happen - promise should always exist)
+                    console.warn(`⚠️ No promise found for case ${caseNumber}, using fallback`);
+                    restoredSectionText.textContent = resultData.description || 'No description available';
+                }
 
                 // Fetch Related Content from SFDC case comments (KCS, Docs, Slack)
                 const sfdcCaseNumber = resultData.case_number;

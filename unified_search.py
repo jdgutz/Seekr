@@ -190,66 +190,132 @@ def search_sfdc_graphql(query: str, max_results: int = 20, config: Dict = None) 
             "Apollo-Require-Preflight": "true"  # Required to bypass CSRF protection
         }
 
-        # GraphQL query to search cases
-        graphql_query = """
-        query SearchCases($searchText: String, $first: Int) {
-          redhat_support_uiapi {
-            query {
-              RedHatSupportCase(
-                where: {
-                  or: [
-                    { CaseNumber__c: { like: $searchText } }
-                    { Subject: { like: $searchText } }
-                  ]
-                }
-                first: $first
-                orderBy: { LastModifiedDate: { order: DESC } }
-              ) {
-                totalCount
-                edges {
-                  node {
-                    Id
-                    CaseNumber__c { value }
-                    Subject { value }
-                    Description { value }
-                    Status { value }
-                    Priority { value }
-                    CreatedDate { value }
-                    LastModifiedDate { value }
-                    SBR_Group__c { value }
-                    SBT__c { value }
-                    Owner {
-                      ... on RedHatSupportGroup {
-                        Id
-                        Name { value }
-                      }
-                      ... on RedHatSupportUser {
-                        Id
-                        Name { value }
-                      }
+        # Optimize query based on input type
+        # Case numbers (8 digits): use exact match (fast, indexed)
+        # Keywords: use LIKE search (slower, but necessary)
+        is_case_number = bool(re.match(r'^\d{8}$', query.strip()))
+
+        if is_case_number:
+            # Fast path: exact match on case number (uses index)
+            print(f"🚀 Using optimized exact-match GraphQL query for case number: {query}", flush=True)
+            graphql_query = """
+            query SearchCasesByNumber($caseNumber: String, $first: Int) {
+              redhat_support_uiapi {
+                query {
+                  RedHatSupportCase(
+                    where: {
+                      CaseNumber__c: { eq: $caseNumber }
                     }
-                    Product {
-                      Name { value }
-                    }
-                    RedHatSupportAccount {
-                      Name { value }
-                      AccountNumber { value }
+                    first: $first
+                    orderBy: { LastModifiedDate: { order: DESC } }
+                  ) {
+                    totalCount
+                    edges {
+                      node {
+                        Id
+                        CaseNumber__c { value }
+                        Subject { value }
+                        Description { value }
+                        Status { value }
+                        Priority { value }
+                        CreatedDate { value }
+                        LastModifiedDate { value }
+                        SBR_Group__c { value }
+                        SBT__c { value }
+                        Owner {
+                          ... on RedHatSupportGroup {
+                            Id
+                            Name { value }
+                          }
+                          ... on RedHatSupportUser {
+                            Id
+                            Name { value }
+                          }
+                        }
+                        Product {
+                          Name { value }
+                        }
+                        RedHatSupportAccount {
+                          Name { value }
+                          AccountNumber { value }
+                        }
+                      }
                     }
                   }
                 }
               }
             }
-          }
-        }
-        """
+            """
 
-        data = {
-            "query": graphql_query,
-            "variables": {
-                "searchText": f"%{query}%",
-                "first": max_results
+            data = {
+                "query": graphql_query,
+                "variables": {
+                    "caseNumber": query.strip(),
+                    "first": max_results
+                }
             }
-        }
+        else:
+            # Slow path: LIKE search for keywords
+            print(f"🔍 Using LIKE-based GraphQL query for keyword search: {query}", flush=True)
+            graphql_query = """
+            query SearchCases($searchText: String, $first: Int) {
+              redhat_support_uiapi {
+                query {
+                  RedHatSupportCase(
+                    where: {
+                      or: [
+                        { CaseNumber__c: { like: $searchText } }
+                        { Subject: { like: $searchText } }
+                      ]
+                    }
+                    first: $first
+                    orderBy: { LastModifiedDate: { order: DESC } }
+                  ) {
+                    totalCount
+                    edges {
+                      node {
+                        Id
+                        CaseNumber__c { value }
+                        Subject { value }
+                        Description { value }
+                        Status { value }
+                        Priority { value }
+                        CreatedDate { value }
+                        LastModifiedDate { value }
+                        SBR_Group__c { value }
+                        SBT__c { value }
+                        Owner {
+                          ... on RedHatSupportGroup {
+                            Id
+                            Name { value }
+                          }
+                          ... on RedHatSupportUser {
+                            Id
+                            Name { value }
+                          }
+                        }
+                        Product {
+                          Name { value }
+                        }
+                        RedHatSupportAccount {
+                          Name { value }
+                          AccountNumber { value }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """
+
+            data = {
+                "query": graphql_query,
+                "variables": {
+                    "searchText": f"%{query}%",
+                    "first": max_results
+                }
+            }
 
         try:
             print(f"📡 Sending GraphQL request for query: {query}", flush=True)
@@ -4430,93 +4496,6 @@ def get_case_escalations(case_number):
                 case_id = case_edges[0].get("node", {}).get("Id", "")
                 app.logger.info(f"  📍 Case ID: {case_id}")
 
-                # Step 2: Query for external links using the case ID
-                # Try different field name patterns since the schema is unclear
-                graphql_query = """
-                query GetExternalLinks($caseId: ID!) {
-                  redhat_support_uiapi {
-                    query {
-                      RedHatSupportExternalLink__c(where: { Case__c: { eq: $caseId } }, first: 20) {
-                        edges {
-                          node {
-                            Id
-                            ExternalId { value }
-                            ExternalLinkName { value }
-                            ExternalURL { value }
-                            ExternalType { value }
-                            Status { value }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-                """
-
-                graphql_resp = requests.post(
-                    "https://graphql.redhat.com",
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": "application/json",
-                        "apollographql-client-name": "seekr-ai",
-                        "apollographql-client-version": "1.0.0",
-                        "Apollo-Require-Preflight": "true"
-                    },
-                    json={
-                        "query": graphql_query,
-                        "variables": {"caseId": case_id}
-                    },
-                    timeout=30
-                )
-
-                if graphql_resp.status_code == 200:
-                    graphql_result = graphql_resp.json()
-
-                    if "errors" in graphql_result:
-                        app.logger.error(f"  ❌ GraphQL errors: {graphql_result['errors']}")
-                    else:
-                        # Check for external links from the separate query
-                        tracker_edges = graphql_result.get("data", {}).get("redhat_support_uiapi", {}).get("query", {}).get("RedHatSupportExternalLink__c", {}).get("edges", [])
-
-                        app.logger.info(f"  ✅ GraphQL found {len(tracker_edges)} external links")
-
-                        for tracker_edge in tracker_edges:
-                            tracker_node = tracker_edge.get("node", {})
-                            external_id = tracker_node.get("ExternalId", {}).get("value", "")
-                            external_name = tracker_node.get("ExternalLinkName", {}).get("value", "")
-                            external_url = tracker_node.get("ExternalURL", {}).get("value", "")
-                            external_type = tracker_node.get("ExternalType", {}).get("value", "")
-                            status = tracker_node.get("Status", {}).get("value", "")
-
-                            # Extract JIRA ticket ID from the URL (e.g., RFE-9044 from https://redhat.atlassian.net/browse/RFE-9044)
-                            resource_key = None
-                            if external_url:
-                                # Parse URL to extract ticket ID
-                                # Format: https://redhat.atlassian.net/browse/TICKET-ID or https://issues.redhat.com/browse/TICKET-ID
-                                match = re.search(r'/browse/([A-Z]+-\d+)', external_url)
-                                if match:
-                                    resource_key = match.group(1)
-                                else:
-                                    # Fallback to external_name if URL parsing fails
-                                    resource_key = external_name or external_id
-                            else:
-                                resource_key = external_name or external_id
-
-                            if resource_key and external_url:
-                                external_trackers.append({
-                                    'resourceKey': resource_key,
-                                    'resourceURL': external_url,
-                                    'title': resource_key,  # Use ticket ID as title
-                                    'status': status or 'Unknown',
-                                    'system': external_type or 'Jira'
-                                })
-                                app.logger.info(f"    ✓ {resource_key} ({external_type or 'External Link'}): {external_url}")
-                else:
-                    try:
-                        error_body = graphql_resp.json()
-                        app.logger.error(f"  ❌ GraphQL HTTP {graphql_resp.status_code}: {error_body}")
-                    except:
-                        app.logger.error(f"  ❌ GraphQL HTTP {graphql_resp.status_code}: {graphql_resp.text[:300]}")
         except Exception as e:
             app.logger.warning(f"  ⚠️ Failed to fetch from Salesforce GraphQL: {e}")
             import traceback
