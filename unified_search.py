@@ -255,7 +255,7 @@ def search_sfdc_graphql(query: str, max_results: int = 20, config: Dict = None) 
                 }
             }
         else:
-            # Slow path: LIKE search for keywords
+            # Slow path: LIKE search for keywords (Subject only - CaseNumber is wasteful for text searches)
             print(f"🔍 Using LIKE-based GraphQL query for keyword search: {query}", flush=True)
             graphql_query = """
             query SearchCases($searchText: String, $first: Int) {
@@ -263,10 +263,7 @@ def search_sfdc_graphql(query: str, max_results: int = 20, config: Dict = None) 
                 query {
                   RedHatSupportCase(
                     where: {
-                      or: [
-                        { CaseNumber__c: { like: $searchText } }
-                        { Subject: { like: $searchText } }
-                      ]
+                      Subject: { like: $searchText }
                     }
                     first: $first
                     orderBy: { LastModifiedDate: { order: DESC } }
